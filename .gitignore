@@ -1,0 +1,28 @@
+# Generated UI/runtime files
+__v0_runtime_loader.js
+__v0_devtools.tsx
+__v0_jsx-dev-runtime.ts
+
+# Node / frontend
+node_modules/
+frontend/node_modules/
+frontend/build/
+.next/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.venv/
+venv/
+backend/venv/
+ryu_controller/venv/
+
+# Environment / local editor
+.env
+frontend/.env
+.env*.local
+.DS_Store
+.vscode/
+*.code-workspace

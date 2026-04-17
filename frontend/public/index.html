@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>SDN IDS Dashboard</title>
+
+<!-- Bootstrap -->
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+
+<!-- Icons -->
+<link href="https://cdn.jsdelivr.net/npm/bootstrap-icons/font/bootstrap-icons.css" rel="stylesheet">
+
+<!-- Chart.js -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+<style>
+body {
+    background: #0f172a;
+    color: white;
+}
+
+/* Sidebar */
+.sidebar {
+    height: 100vh;
+    background: #1e293b;
+    padding: 20px;
+}
+
+/* Cards */
+.card {
+    border-radius: 15px;
+    background: #111827;
+    color: white;
+}
+
+/* Navbar */
+.navbar {
+    background: #1e293b;
+}
+
+/* Table */
+.table {
+    color: white;
+}
+</style>
+</head>
+
+<body>
+
+<!-- ================= NAVBAR ================= -->
+<nav class="navbar navbar-blue px-4">
+    <h4>🚀 SDN IDS + Traffic Analysis Dashboard</h4>
+</nav>
+
+<div class="container-fluid">
+<div class="row">
+
+<!-- ================= SIDEBAR ================= -->
+<div class="col-md-2 sidebar">
+    <h5>Control Panel</h5>
+
+    <ul class="nav flex-column mt-3">
+        <li class="nav-item">
+            <a class="nav-link text-white" href="#"><i class="bi bi-speedometer2"></i> Dashboard</a>
+        </li>
+        <li class="nav-item">
+            <a class="nav-link text-white" href="#"><i class="bi bi-diagram-3"></i> Topology</a>
+        </li>
+        <li class="nav-item">
+            <a class="nav-link text-white" href="#"><i class="bi bi-shield-lock"></i> IDS Alerts</a>
+        </li>
+        <li class="nav-item">
+            <a class="nav-link text-white" href="#"><i class="bi bi-cpu"></i> Controller</a>
+        </li>
+    </ul>
+</div>
+
+<!-- ================= MAIN ================= -->
+<div class="col-md-10 p-4">
+
+<!-- ================= STATS ================= -->
+<div class="row">
+
+<div class="col-md-3">
+<div class="card text-center p-3">
+<h6>Switches</h6>
+<h2 id="switches">0</h2>
+</div>
+</div>
+
+<div class="col-md-3">
+<div class="card text-center p-3">
+<h6>Hosts</h6>
+<h2 id="hosts">0</h2>
+</div>
+</div>
+
+<div class="col-md-3">
+<div class="card text-center p-3">
+<h6>Active Flows</h6>
+<h2 id="flows">0</h2>
+</div>
+</div>
+
+<div class="col-md-3">
+<div class="card text-center p-3">
+<h6>Alerts</h6>
+<h2 id="alertsCount">0</h2>
+</div>
+</div>
+
+</div>
+
+<!-- ================= CONTROLLER STATUS ================= -->
+<div class="card mt-4 p-3">
+<h5>🧠 Controller Status</h5>
+<p id="controllerStatus">Loading...</p>
+</div>
+
+<!-- ================= TOPOLOGY INFO ================= -->
+<div class="card mt-4 p-3">
+<h5>🌐 Topology Overview</h5>
+<div class="row text-center">
+
+<div class="col-md-3">
+<p>Core Network</p>
+<h4>2 Switches</h4>
+</div>
+
+<div class="col-md-3">
+<p>Departments</p>
+<h4>4</h4>
+</div>
+
+<div class="col-md-3">
+<p>Servers</p>
+<h4>4</h4>
+</div>
+
+<div class="col-md-3">
+<p>Attackers</p>
+<h4>6</h4>
+</div>
+
+</div>
+</div>
+
+<!-- ================= TRAFFIC CHART ================= -->
+<div class="card mt-4 p-3">
+<h5>📊 Traffic / Flow Trend</h5>
+<canvas id="chart"></canvas>
+</div>
+
+<!-- ================= IDS ALERTS ================= -->
+<div class="card mt-4 p-3">
+<h5>🚨 IDS Alerts</h5>
+<table class="table table-dark table-striped">
+<thead>
+<tr>
+<th>Type</th>
+<th>Source</th>
+<th>Severity</th>
+<th>Time</th>
+</tr>
+</thead>
+<tbody id="alertTable"></tbody>
+</table>
+</div>
+
+</div>
+</div>
+</div>
+
+<!-- ================= SCRIPT ================= -->
+<script>
+
+// ================= CHART =================
+let chart = new Chart(document.getElementById("chart"), {
+    type: 'line',
+    data: {
+        labels: [],
+        datasets: [{
+            label: 'Flows',
+            data: [],
+            borderWidth: 2
+        }]
+    }
+});
+
+// ================= LOAD DATA =================
+async function loadData() {
+
+    try {
+        // Controller Status
+        let res1 = await fetch("http://127.0.0.1:5000/api/controller/status");
+        let controller = await res1.json();
+
+        document.getElementById("switches").innerText = controller.switches_managed;
+        document.getElementById("hosts").innerText = controller.hosts_connected;
+        document.getElementById("flows").innerText = controller.active_flows;
+
+        document.getElementById("controllerStatus").innerText =
+            "Status: " + controller.status + " | CPU: " + controller.cpu_usage + "% | Memory: " + controller.memory_usage + "%";
+
+        // IDS Alerts
+        let res2 = await fetch("http://127.0.0.1:5000/api/ids/alerts");
+        let alerts = await res2.json();
+
+        document.getElementById("alertsCount").innerText = alerts.length;
+
+        let table = document.getElementById("alertTable");
+        table.innerHTML = "";
+
+        alerts.forEach(a => {
+            table.innerHTML += `
+                <tr>
+                    <td>${a.type}</td>
+                    <td>${a.source_ip}</td>
+                    <td>${a.severity}</td>
+                    <td>${a.timestamp}</td>
+                </tr>
+            `;
+        });
+
+        // Traffic Flows
+        let res3 = await fetch("http://127.0.0.1:5000/api/traffic/flows");
+        let flows = await res3.json();
+
+        let time = new Date().toLocaleTimeString();
+
+        chart.data.labels.push(time);
+        chart.data.datasets[0].data.push(flows.length);
+
+        if (chart.data.labels.length > 10) {
+            chart.data.labels.shift();
+            chart.data.datasets[0].data.shift();
+        }
+
+        chart.update();
+
+    } catch (err) {
+        console.log("Backend not running");
+    }
+}
+
+setInterval(loadData, 2000);
+</script>
+
+</body>
+</html>
