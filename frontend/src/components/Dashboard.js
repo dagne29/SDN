@@ -73,6 +73,20 @@ export default function Dashboard() {
     }
   };
 
+  const handleHostClick = (host) => {
+    setPingSelection((prev) => ({ ...prev, src: host }));
+    setTrafficSelection((prev) => ({ ...prev, src: host }));
+    navigate(`/hosts/${host}`);
+  };
+
+  const handleFlowClick = (flow) => {
+    navigate(`/flows/${flow.id}`);
+  };
+
+  const handleAlertClick = (alert) => {
+    navigate(`/alerts/${alert.id}`);
+  };
+
   if (loading) {
     return (
       <div className="dashboard-container">
@@ -259,7 +273,16 @@ export default function Dashboard() {
                       <strong>Live Hosts</strong>
                       <div className="badge-wrap">
                         {mininetStatus?.hosts?.map((host) => (
-                          <span key={host} className="badge bg-secondary">{host}</span>
+                          <button
+                            key={host}
+                            type="button"
+                            className="badge bg-secondary"
+                            onClick={() => handleHostClick(host)}
+                            aria-label={`View ${host} details`}
+                            style={{ cursor: 'pointer', marginRight: 6 }}
+                          >
+                            {host}
+                          </button>
                         ))}
                       </div>
                     </div>
@@ -281,6 +304,15 @@ export default function Dashboard() {
                       <p className="mb-2">
                         <span className="badge bg-primary me-2">{pingResult.status}</span>
                         <strong>{pingResult.command}</strong>
+                        {pingResult.flow_id ? (
+                          <button
+                            type="button"
+                            className="btn btn-link btn-sm ms-2"
+                            onClick={() => handleFlowClick({ id: pingResult.flow_id })}
+                          >
+                            View Flow
+                          </button>
+                        ) : null}
                       </p>
                       <table className="table table-borderless table-sm">
                         <tbody>
@@ -290,7 +322,29 @@ export default function Dashboard() {
                           <tr><th>Round Trip</th><td>{pingResult.round_trip_time}</td></tr>
                           <tr>
                             <th>IDS Triggered</th>
-                            <td>{pingResult.generated_alerts?.length ? `${pingResult.generated_alerts.length} alert(s)` : 'No alert'}</td>
+                            <td>
+                              {pingResult.generated_alerts?.length ? (
+                                <div>
+                                  <span>{`${pingResult.generated_alerts.length} alert(s)`}</span>
+                                  <ul className="mt-2 mb-0">
+                                    {pingResult.generated_alerts.map((a) => (
+                                      <li key={a.id} style={{ listStyle: 'none', padding: 0 }}>
+                                        <button
+                                          type="button"
+                                          className="btn btn-sm btn-outline-danger me-2"
+                                          onClick={() => handleAlertClick(a)}
+                                        >
+                                          {a.type}
+                                        </button>
+                                        <small className="text-muted">{a.reason || a.timestamp}</small>
+                                      </li>
+                                    ))}
+                                  </ul>
+                                </div>
+                              ) : (
+                                'No alert'
+                              )}
+                            </td>
                           </tr>
                         </tbody>
                       </table>
@@ -312,14 +366,50 @@ export default function Dashboard() {
                     <div className="result-content">
                       <table className="table table-borderless table-sm">
                         <tbody>
-                          <tr><th>Command</th><td>{trafficResult.command}</td></tr>
+                          <tr>
+                            <th>Command</th>
+                            <td>
+                              {trafficResult.command}
+                              {trafficResult.flow_id ? (
+                                <button
+                                  type="button"
+                                  className="btn btn-link btn-sm ms-2"
+                                  onClick={() => handleFlowClick({ id: trafficResult.flow_id })}
+                                >
+                                  View Flow
+                                </button>
+                              ) : null}
+                            </td>
+                          </tr>
                           <tr><th>Source</th><td>{trafficResult.src_host} ({trafficResult.src_ip})</td></tr>
                           <tr><th>Destination</th><td>{trafficResult.dst_host} ({trafficResult.dst_ip})</td></tr>
                           <tr><th>Bandwidth</th><td>{trafficResult.bandwidth}</td></tr>
                           <tr><th>Packet Loss</th><td>{trafficResult.packet_loss}</td></tr>
                           <tr>
                             <th>IDS Triggered</th>
-                            <td>{trafficResult.generated_alerts?.length ? `${trafficResult.generated_alerts.length} alert(s)` : 'No alert'}</td>
+                            <td>
+                              {trafficResult.generated_alerts?.length ? (
+                                <div>
+                                  <span>{`${trafficResult.generated_alerts.length} alert(s)`}</span>
+                                  <ul className="mt-2 mb-0">
+                                    {trafficResult.generated_alerts.map((a) => (
+                                      <li key={a.id} style={{ listStyle: 'none', padding: 0 }}>
+                                        <button
+                                          type="button"
+                                          className="btn btn-sm btn-outline-danger me-2"
+                                          onClick={() => handleAlertClick(a)}
+                                        >
+                                          {a.type}
+                                        </button>
+                                        <small className="text-muted">{a.reason || a.timestamp}</small>
+                                      </li>
+                                    ))}
+                                  </ul>
+                                </div>
+                              ) : (
+                                'No alert'
+                              )}
+                            </td>
                           </tr>
                         </tbody>
                       </table>
@@ -342,7 +432,13 @@ export default function Dashboard() {
                   {dashboardData?.recent_traffic?.length ? (
                     <div className="list-group list-group-flush">
                       {dashboardData.recent_traffic.slice().reverse().slice(0, 5).map((flow) => (
-                        <div key={flow.id} className="list-group-item">
+                        <div
+                          key={flow.id}
+                          className="list-group-item list-group-item-action"
+                          onClick={() => handleFlowClick(flow)}
+                          role="button"
+                          style={{ cursor: 'pointer' }}
+                        >
                           <small className="text-muted">
                             {flow.src_host} to {flow.dst_host} | {flow.protocol} | {flow.bytes} bytes
                           </small>
@@ -365,7 +461,13 @@ export default function Dashboard() {
                   {dashboardData?.active_alerts?.length ? (
                     <div className="list-group list-group-flush">
                       {dashboardData.active_alerts.slice().reverse().map((alert) => (
-                        <div key={alert.id} className="list-group-item list-group-item-danger">
+                        <div
+                          key={alert.id}
+                          className="list-group-item list-group-item-danger list-group-item-action"
+                          onClick={() => handleAlertClick(alert)}
+                          role="button"
+                          style={{ cursor: 'pointer' }}
+                        >
                           <small>
                             <strong>{alert.type}</strong> from {alert.source_host} to {alert.destination_host}
                           </small>
