@@ -9,7 +9,6 @@ Features:
 ✔ 6 Attackers
 ✔ QoS (bandwidth, delay, loss)
 ✔ Traffic Simulation
-✔ Auto Testing
 """
 
 from mininet.net import Mininet
