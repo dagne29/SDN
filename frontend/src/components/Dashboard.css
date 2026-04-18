@@ -5,6 +5,59 @@
   min-height: 100vh;
 }
 
+.dashboard-hero {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 22px;
+}
+
+.hero-card {
+  padding: 18px 20px;
+  border-radius: 12px;
+  background: linear-gradient(180deg, rgba(255,255,255,0.85), rgba(255,255,255,0.7));
+  box-shadow: 0 8px 20px rgba(16,24,40,0.06);
+}
+
+.card-accent {
+  border-left: 6px solid rgba(102,126,234,0.9);
+}
+
+/* Ping summary in hero */
+.ping-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  border-radius: 10px;
+  background: linear-gradient(180deg, rgba(255,255,255,0.95), rgba(250,250,250,0.85));
+  border: 1px solid rgba(16,24,40,0.04);
+  box-shadow: 0 6px 16px rgba(16,24,40,0.04);
+}
+
+.ping-summary { cursor: pointer; }
+
+.highlight-pulse {
+  animation: highlight-pulse 2s ease-in-out;
+  box-shadow: 0 10px 28px rgba(99,102,241,0.12) !important;
+  border: 1px solid rgba(99,102,241,0.25) !important;
+}
+
+@keyframes highlight-pulse {
+  0% { transform: translateY(0); }
+  10% { transform: translateY(-2px); }
+  50% { transform: translateY(0); }
+  100% { transform: translateY(0); }
+}
+
+.ping-summary .text-success {
+  color: #16a34a !important;
+}
+
+.ping-summary .text-danger {
+  color: #dc2626 !important;
+}
+
 .main-content {
   max-width: 1400px;
   margin: 0 auto;

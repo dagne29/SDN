@@ -111,6 +111,18 @@ def create_topology():
     net.addLink(iot_sw, core1)
 
     # =========================
+    # 🏫 BAHRDAR CAMPUS (additional department/network)
+    # =========================
+    bah_sw = net.addSwitch('s12')
+
+    # Add 6 hosts for Bahrdar campus (h71..h76)
+    for j in range(1, 7):
+        host = net.addHost(f'h7{j}', ip=f'192.168.50.{j}/24')
+        net.addLink(host, bah_sw, bw=20, delay='5ms')
+
+    net.addLink(bah_sw, core2, bw=50)
+
+    # =========================
     # 🚨 ATTACKER NETWORK
     # =========================
     atk_sw = net.addSwitch('s11')

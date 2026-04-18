@@ -14,10 +14,10 @@ export default function Navigation() {
   ];
 
   return (
-    <nav className="navbar navbar-dark bg-dark">
+    <nav className="navbar">
       <div className="container-fluid">
         <Link to="/" className="navbar-brand mb-0 h1 text-decoration-none">
-          SDN Network Analysis & IDS
+          <i className="bi bi-shield-lock-fill me-2" /> SDN Network Analysis & IDS
         </Link>
         <div className="nav-tabs">
           {tabs.map(tab => (
@@ -26,7 +26,10 @@ export default function Navigation() {
               to={tab.path}
               className={`nav-btn ${location.pathname === tab.path ? 'active' : ''}`}
             >
-              {tab.icon} {tab.label}
+              <i className={`bi ${
+                tab.id === 'overview' ? 'bi-speedometer2' : tab.id === 'topology' ? 'bi-map' : tab.id === 'traffic' ? 'bi-graph-up' : tab.id === 'controller' ? 'bi-hdd-network' : 'bi-shield-exclamation'
+              } me-2`} />
+              {tab.label}
             </Link>
           ))}
         </div>

@@ -1,11 +1,42 @@
 body {
-  background-color: #f5f6fa;
-  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  background: radial-gradient(1200px 600px at 10% 10%, rgba(102,126,234,0.12), transparent 8%), radial-gradient(1000px 500px at 90% 90%, rgba(245,83,150,0.08), transparent 8%), #f4f6fb;
+  font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  color: #1f2937;
   margin: 0;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 .App {
   min-height: 100vh;
+}
+
+.app-hero {
+  max-width: 1400px;
+  margin: 26px auto 8px auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.hero-title {
+  font-size: 1.35rem;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.hero-subtitle {
+  color: #475569;
+  font-size: 0.95rem;
+}
+
+.glass-card {
+  background: linear-gradient(180deg, rgba(255,255,255,0.7), rgba(255,255,255,0.55));
+  backdrop-filter: blur(6px) saturate(120%);
+  border: 1px solid rgba(255,255,255,0.6);
+  box-shadow: 0 6px 18px rgba(16,24,40,0.08);
+  border-radius: 12px;
 }
 
 #root {

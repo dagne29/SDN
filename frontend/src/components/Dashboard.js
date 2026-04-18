@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import 'bootstrap/dist/css/bootstrap.min.css';
 import { useNavigate } from 'react-router-dom';
 import { dashboardAPI, mininetAPI, trafficAPI } from '../services/api';
@@ -23,6 +23,9 @@ export default function Dashboard() {
           mininetAPI.getStatus(),
         ]);
         setDashboardData(dashboardRes.data);
+        // populate pingResult if backend provides a last-ping summary
+        const lastPing = dashboardRes.data?.last_ping || dashboardRes.data?.last_ping_result || dashboardRes.data?.ping || dashboardRes.data?.last_ping_data || null;
+        if (lastPing) setPingResult(lastPing);
         setMininetStatus(statusRes.data);
 
         const hosts = statusRes.data.hosts || [];
@@ -45,6 +48,8 @@ export default function Dashboard() {
   const refreshOverview = async () => {
     const response = await dashboardAPI.getOverview();
     setDashboardData(response.data);
+    const lastPing = response.data?.last_ping || response.data?.last_ping_result || response.data?.ping || response.data?.last_ping_data || null;
+    if (lastPing) setPingResult(lastPing);
   };
 
   const handlePingTest = async () => {
@@ -79,6 +84,24 @@ export default function Dashboard() {
     navigate(`/hosts/${host}`);
   };
 
+  const pingCardRef = useRef(null);
+  const [highlightPing, setHighlightPing] = useState(false);
+
+  const handlePingSummaryClick = () => {
+    if (!pingResult) return;
+    // navigate to topology and also scroll/highlight the ping card here
+    const src = pingResult.src_host || pingResult.src;
+    const dst = pingResult.dst_host || pingResult.dst;
+    if (src && dst) {
+      navigate(`/topology?src=${encodeURIComponent(src)}&dst=${encodeURIComponent(dst)}`);
+    }
+    if (pingCardRef.current) {
+      pingCardRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      setHighlightPing(true);
+      setTimeout(() => setHighlightPing(false), 2200);
+    }
+  };
+
   const handleFlowClick = (flow) => {
     navigate(`/flows/${flow.id}`);
   };
@@ -110,6 +133,32 @@ export default function Dashboard() {
   return (
     <div className="dashboard-container">
       <div className="main-content">
+        <div className="app-hero">
+          <div className="hero-card glass-card card-accent">
+            <div>
+              <div className="hero-title">SDN IDS Dashboard</div>
+              <div className="hero-subtitle">Realtime network view — controller, topology, traffic, and IDS alerts</div>
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+            {pingResult ? (
+              <div onClick={handlePingSummaryClick} role="button" tabIndex={0} className="ping-summary glass-card" style={{ padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 12 }}>
+                <i className={`bi ${pingResult.status && pingResult.status.toLowerCase().includes('success') ? 'bi-check-circle-fill text-success' : 'bi-x-circle-fill text-danger'}`} style={{ fontSize: 20 }} />
+                <div style={{ lineHeight: 1 }}>
+                  <div style={{ fontWeight: 600 }}>{pingResult.src_host} → {pingResult.dst_host}</div>
+                  <div style={{ fontSize: 12, color: '#475569' }}>{pingResult.status} • {pingResult.round_trip_time || '—'}</div>
+                </div>
+              </div>
+            ) : null}
+
+            <button className="btn btn-outline-primary" onClick={refreshOverview}>
+              <i className="bi bi-arrow-clockwise me-1" /> Refresh
+            </button>
+            <button className="btn btn-primary" onClick={() => navigate('/topology')}>
+              <i className="bi bi-map me-1" /> Topology
+            </button>
+          </div>
+        </div>
         <div className="overview-section">
           <h2 className="section-title">Network Overview</h2>
 
@@ -294,7 +343,7 @@ export default function Dashboard() {
 
           <div className="row mt-4 g-4">
             <div className="col-12 col-xl-6">
-              <div className="card result-card h-100">
+                <div ref={pingCardRef} id="last-ping-card" className={`card result-card h-100 ${highlightPing ? 'highlight-pulse' : ''}`}>
                 <div className="card-header">
                   <h5>Last Ping Result</h5>
                 </div>
@@ -317,9 +366,21 @@ export default function Dashboard() {
                       <table className="table table-borderless table-sm">
                         <tbody>
                           <tr><th>Source</th><td>{pingResult.src_host} ({pingResult.src_ip})</td></tr>
+                          <tr><th>Source MAC</th><td>{pingResult.src_mac || '—'}</td></tr>
                           <tr><th>Destination</th><td>{pingResult.dst_host} ({pingResult.dst_ip})</td></tr>
+                          <tr><th>Destination MAC</th><td>{pingResult.dst_mac || '—'}</td></tr>
                           <tr><th>Protocol</th><td>{pingResult.protocol}</td></tr>
-                          <tr><th>Round Trip</th><td>{pingResult.round_trip_time}</td></tr>
+                          <tr><th>Round Trip</th><td>{pingResult.round_trip_time || '—'}</td></tr>
+                          <tr><th>Timestamp</th><td>{pingResult.timestamp || pingResult.time || '—'}</td></tr>
+                          <tr><th>Severity</th><td>{(() => {
+                            const sev = pingResult.generated_alerts?.reduce((acc, a) => Math.max(acc, a?.severity || 0), 0) || 0;
+                            if (sev >= 8) return 'Critical';
+                            if (sev >= 5) return 'High';
+                            if (sev >= 3) return 'Medium';
+                            if (sev > 0) return 'Low';
+                            return 'None';
+                          })()}</td></tr>
+                          <tr><th>Attacker</th><td>{(pingResult.generated_alerts?.some(a => (a?.type || '').toLowerCase().includes('attack') || (a?.severity || 0) >= 5)) ? 'Yes' : 'No'}</td></tr>
                           <tr>
                             <th>IDS Triggered</th>
                             <td>
