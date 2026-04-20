@@ -50,8 +50,23 @@ export const trafficAPI = {
   getBandwidthTrends: (interval = 12) => apiClient.get(`/traffic/bandwidth-trends?interval=${interval}`),
   getPortStats: () => apiClient.get('/traffic/port-stats'),
   getStats: () => apiClient.get('/traffic/stats'),
-  runTrafficTest: (src, dst) => apiClient.get(`/mininet/traffic/${src}/${dst}`),
   runPingTest: (src, dst) => apiClient.get(`/mininet/ping/${src}/${dst}`),
+};
+
+// Ping API
+export const pingAPI = {
+  getAll: (params = {}) => {
+    const search = new URLSearchParams();
+    if (params.limit != null) search.set('limit', params.limit);
+    if (params.src) search.set('src', params.src);
+    if (params.dst) search.set('dst', params.dst);
+    if (params.status) search.set('status', params.status);
+    if (params.attackOnly) search.set('attack_only', 'true');
+    const query = search.toString();
+    return apiClient.get(`/pings${query ? `?${query}` : ''}`);
+  },
+  getLatest: () => apiClient.get('/pings/latest'),
+  getStats: () => apiClient.get('/pings/stats'),
 };
 
 // IDS API

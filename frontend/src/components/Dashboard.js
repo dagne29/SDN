@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import 'bootstrap/dist/css/bootstrap.min.css';
 import { useNavigate } from 'react-router-dom';
-import { dashboardAPI, mininetAPI, trafficAPI } from '../services/api';
+import { dashboardAPI, mininetAPI, pingAPI, trafficAPI } from '../services/api';
 import './Dashboard.css';
 
 export default function Dashboard() {
@@ -9,11 +9,10 @@ export default function Dashboard() {
   const [dashboardData, setDashboardData] = useState(null);
   const [mininetStatus, setMininetStatus] = useState(null);
   const [pingResult, setPingResult] = useState(null);
-  const [trafficResult, setTrafficResult] = useState(null);
+  const [recentPingEvents, setRecentPingEvents] = useState([]);
   const [feedback, setFeedback] = useState('');
   const [loading, setLoading] = useState(true);
   const [pingSelection, setPingSelection] = useState({ src: 'h1', dst: 'h2' });
-  const [trafficSelection, setTrafficSelection] = useState({ src: 'h1', dst: 'h3' });
 
   useEffect(() => {
     const load = async () => {
@@ -23,15 +22,20 @@ export default function Dashboard() {
           mininetAPI.getStatus(),
         ]);
         setDashboardData(dashboardRes.data);
-        // populate pingResult if backend provides a last-ping summary
-        const lastPing = dashboardRes.data?.last_ping || dashboardRes.data?.last_ping_result || dashboardRes.data?.ping || dashboardRes.data?.last_ping_data || null;
-        if (lastPing) setPingResult(lastPing);
+        const [latestPingRes, recentPingRes] = await Promise.all([
+          pingAPI.getLatest(),
+          pingAPI.getAll({ limit: 10 }),
+        ]);
+        const latestPing = latestPingRes.data && Object.keys(latestPingRes.data).length ? latestPingRes.data : null;
+        const lastPing = latestPing || dashboardRes.data?.last_ping || dashboardRes.data?.last_ping_result || null;
+        if (lastPing && Object.keys(lastPing).length) setPingResult(lastPing);
+        else setPingResult(null);
+        setRecentPingEvents(recentPingRes.data || dashboardRes.data?.recent_ping_traffic || []);
         setMininetStatus(statusRes.data);
 
         const hosts = statusRes.data.hosts || [];
         if (hosts.length > 1) {
           setPingSelection({ src: hosts[0], dst: hosts[1] });
-          setTrafficSelection({ src: hosts[0], dst: hosts[Math.min(2, hosts.length - 1)] });
         }
       } catch (error) {
         console.error('Error fetching dashboard data:', error);
@@ -48,16 +52,28 @@ export default function Dashboard() {
   const refreshOverview = async () => {
     const response = await dashboardAPI.getOverview();
     setDashboardData(response.data);
-    const lastPing = response.data?.last_ping || response.data?.last_ping_result || response.data?.ping || response.data?.last_ping_data || null;
-    if (lastPing) setPingResult(lastPing);
+    const [latestPingRes, recentPingRes] = await Promise.all([
+      pingAPI.getLatest(),
+      pingAPI.getAll({ limit: 10 }),
+    ]);
+    const latestPing = latestPingRes.data && Object.keys(latestPingRes.data).length ? latestPingRes.data : null;
+    const lastPing = latestPing || response.data?.last_ping || response.data?.last_ping_result || null;
+    if (lastPing && Object.keys(lastPing).length) setPingResult(lastPing);
+    else setPingResult(null);
+    setRecentPingEvents(recentPingRes.data || response.data?.recent_ping_traffic || []);
   };
 
   const handlePingTest = async () => {
     try {
       const response = await trafficAPI.runPingTest(pingSelection.src, pingSelection.dst);
-      setPingResult(response.data);
+      const pingResponse = response.data || {};
+      setPingResult({
+        ...pingResponse,
+        src_host: pingResponse.src_host || pingSelection.src,
+        dst_host: pingResponse.dst_host || pingSelection.dst,
+      });
       setFeedback(`Ping ${pingSelection.src} to ${pingSelection.dst} completed.`);
-      refreshOverview();
+      await refreshOverview();
     } catch (error) {
       console.error('Error executing ping test:', error);
       setFeedback('Ping request failed.');
@@ -65,22 +81,8 @@ export default function Dashboard() {
     }
   };
 
-  const handleTrafficTest = async () => {
-    try {
-      const response = await trafficAPI.runTrafficTest(trafficSelection.src, trafficSelection.dst);
-      setTrafficResult(response.data);
-      setFeedback(`Traffic test ${trafficSelection.src} to ${trafficSelection.dst} completed.`);
-      refreshOverview();
-    } catch (error) {
-      console.error('Error executing traffic test:', error);
-      setFeedback('Traffic test failed.');
-      setTrafficResult(null);
-    }
-  };
-
   const handleHostClick = (host) => {
     setPingSelection((prev) => ({ ...prev, src: host }));
-    setTrafficSelection((prev) => ({ ...prev, src: host }));
     navigate(`/hosts/${host}`);
   };
 
@@ -130,6 +132,11 @@ export default function Dashboard() {
     { title: 'IDS Alerts', description: 'Review detections and blocks', destination: '/alerts', badge: 'Security' },
   ];
 
+  const hasPingResult = Boolean(
+    pingResult &&
+    (pingResult.id || pingResult.flow_id || pingResult.command || pingResult.output || pingResult.src_host || pingResult.dst_host)
+  );
+
   return (
     <div className="dashboard-container">
       <div className="main-content">
@@ -141,12 +148,19 @@ export default function Dashboard() {
             </div>
           </div>
           <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-            {pingResult ? (
+            {hasPingResult ? (
               <div onClick={handlePingSummaryClick} role="button" tabIndex={0} className="ping-summary glass-card" style={{ padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 12 }}>
                 <i className={`bi ${pingResult.status && pingResult.status.toLowerCase().includes('success') ? 'bi-check-circle-fill text-success' : 'bi-x-circle-fill text-danger'}`} style={{ fontSize: 20 }} />
-                <div style={{ lineHeight: 1 }}>
+                <div style={{ lineHeight: 1.15 }}>
                   <div style={{ fontWeight: 600 }}>{pingResult.src_host} → {pingResult.dst_host}</div>
-                  <div style={{ fontSize: 12, color: '#475569' }}>{pingResult.status} • {pingResult.round_trip_time || '—'}</div>
+                  <div style={{ fontSize: 12, color: '#475569' }}>
+                    {pingResult.status} • {pingResult.round_trip_time || (pingResult.latency_ms != null ? `${pingResult.latency_ms} ms` : '—')}
+                  </div>
+                  {pingResult.output ? (
+                    <div style={{ fontSize: 11, color: '#64748b', marginTop: 2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 420 }}>
+                      {String(pingResult.output).split('\n')[0]}
+                    </div>
+                  ) : null}
                 </div>
               </div>
             ) : null}
@@ -261,31 +275,11 @@ export default function Dashboard() {
                         </div>
                       </div>
 
-                      <div className="command-row">
-                        <label className="form-label">Traffic Test</label>
-                        <div className="command-grid">
-                          <select
-                            className="form-select"
-                            value={trafficSelection.src}
-                            onChange={(event) => setTrafficSelection((prev) => ({ ...prev, src: event.target.value }))}
-                          >
-                            {mininetStatus?.hosts?.map((host) => (
-                              <option key={host} value={host}>{host}</option>
-                            ))}
-                          </select>
-                          <select
-                            className="form-select"
-                            value={trafficSelection.dst}
-                            onChange={(event) => setTrafficSelection((prev) => ({ ...prev, dst: event.target.value }))}
-                          >
-                            {mininetStatus?.hosts?.map((host) => (
-                              <option key={host} value={host}>{host}</option>
-                            ))}
-                          </select>
-                          <button className="btn btn-success" onClick={handleTrafficTest}>
-                            Run Iperf
-                          </button>
-                        </div>
+                    </div>
+                    <div className="alert alert-secondary mt-3 mb-0">
+                      Run traffic tests from the Mininet terminal in VS Code, for example:
+                      <div className="mt-2">
+                        <code>h1 iperf h3</code>
                       </div>
                     </div>
                   </div>
@@ -348,7 +342,7 @@ export default function Dashboard() {
                   <h5>Last Ping Result</h5>
                 </div>
                 <div className="card-body">
-                  {pingResult ? (
+                  {hasPingResult ? (
                     <div className="result-content">
                       <p className="mb-2">
                         <span className="badge bg-primary me-2">{pingResult.status}</span>
@@ -370,8 +364,20 @@ export default function Dashboard() {
                           <tr><th>Destination</th><td>{pingResult.dst_host} ({pingResult.dst_ip})</td></tr>
                           <tr><th>Destination MAC</th><td>{pingResult.dst_mac || '—'}</td></tr>
                           <tr><th>Protocol</th><td>{pingResult.protocol}</td></tr>
-                          <tr><th>Round Trip</th><td>{pingResult.round_trip_time || '—'}</td></tr>
+                          <tr><th>Packets</th><td>{pingResult.packets_transmitted || pingResult.packets || '—'} tx / {pingResult.packets_received || '—'} rx</td></tr>
+                          <tr><th>Packet Loss</th><td>{pingResult.packet_loss || (pingResult.packet_loss_pct != null ? `${pingResult.packet_loss_pct}%` : '—')}</td></tr>
+                          <tr><th>Round Trip</th><td>{pingResult.round_trip_time || (pingResult.latency_ms != null ? `${pingResult.latency_ms} ms` : '—')}</td></tr>
                           <tr><th>Timestamp</th><td>{pingResult.timestamp || pingResult.time || '—'}</td></tr>
+                          {pingResult.output ? (
+                            <tr>
+                              <th>Output</th>
+                              <td>
+                                <pre className="mb-0" style={{ whiteSpace: 'pre-wrap', fontSize: 12, background: '#0b1220', color: '#e2e8f0', padding: 10, borderRadius: 8 }}>
+                                  {String(pingResult.output).trim()}
+                                </pre>
+                              </td>
+                            </tr>
+                          ) : null}
                           <tr><th>Severity</th><td>{(() => {
                             const sev = pingResult.generated_alerts?.reduce((acc, a) => Math.max(acc, a?.severity || 0), 0) || 0;
                             if (sev >= 8) return 'Critical';
@@ -380,7 +386,7 @@ export default function Dashboard() {
                             if (sev > 0) return 'Low';
                             return 'None';
                           })()}</td></tr>
-                          <tr><th>Attacker</th><td>{(pingResult.generated_alerts?.some(a => (a?.type || '').toLowerCase().includes('attack') || (a?.severity || 0) >= 5)) ? 'Yes' : 'No'}</td></tr>
+                          <tr><th>Attacker</th><td>{(pingResult.attack_detected || (pingResult.src_host || '').startsWith('atk_') || (pingResult.dst_host || '').startsWith('atk_')) ? 'Yes' : 'No'}</td></tr>
                           <tr>
                             <th>IDS Triggered</th>
                             <td>
@@ -420,64 +426,13 @@ export default function Dashboard() {
             <div className="col-12 col-xl-6">
               <div className="card result-card h-100">
                 <div className="card-header">
-                  <h5>Last Traffic Test</h5>
+                  <h5>Terminal Traffic Mode</h5>
                 </div>
                 <div className="card-body">
-                  {trafficResult ? (
-                    <div className="result-content">
-                      <table className="table table-borderless table-sm">
-                        <tbody>
-                          <tr>
-                            <th>Command</th>
-                            <td>
-                              {trafficResult.command}
-                              {trafficResult.flow_id ? (
-                                <button
-                                  type="button"
-                                  className="btn btn-link btn-sm ms-2"
-                                  onClick={() => handleFlowClick({ id: trafficResult.flow_id })}
-                                >
-                                  View Flow
-                                </button>
-                              ) : null}
-                            </td>
-                          </tr>
-                          <tr><th>Source</th><td>{trafficResult.src_host} ({trafficResult.src_ip})</td></tr>
-                          <tr><th>Destination</th><td>{trafficResult.dst_host} ({trafficResult.dst_ip})</td></tr>
-                          <tr><th>Bandwidth</th><td>{trafficResult.bandwidth}</td></tr>
-                          <tr><th>Packet Loss</th><td>{trafficResult.packet_loss}</td></tr>
-                          <tr>
-                            <th>IDS Triggered</th>
-                            <td>
-                              {trafficResult.generated_alerts?.length ? (
-                                <div>
-                                  <span>{`${trafficResult.generated_alerts.length} alert(s)`}</span>
-                                  <ul className="mt-2 mb-0">
-                                    {trafficResult.generated_alerts.map((a) => (
-                                      <li key={a.id} style={{ listStyle: 'none', padding: 0 }}>
-                                        <button
-                                          type="button"
-                                          className="btn btn-sm btn-outline-danger me-2"
-                                          onClick={() => handleAlertClick(a)}
-                                        >
-                                          {a.type}
-                                        </button>
-                                        <small className="text-muted">{a.reason || a.timestamp}</small>
-                                      </li>
-                                    ))}
-                                  </ul>
-                                </div>
-                              ) : (
-                                'No alert'
-                              )}
-                            </td>
-                          </tr>
-                        </tbody>
-                      </table>
-                    </div>
-                  ) : (
-                    <p className="text-muted mb-0">No traffic test has been executed yet.</p>
-                  )}
+                  <p className="mb-2">Traffic tests now run from the Mininet terminal in VS Code.</p>
+                  <p className="text-muted mb-0">
+                    Example: <code>h1 iperf h3</code>
+                  </p>
                 </div>
               </div>
             </div>
@@ -490,9 +445,9 @@ export default function Dashboard() {
                   <h5>Recent Ping Activity</h5>
                 </div>
                 <div className="card-body">
-                  {dashboardData?.recent_ping_traffic?.length ? (
+                  {recentPingEvents.length ? (
                     <div className="list-group list-group-flush">
-                      {dashboardData.recent_ping_traffic.slice().reverse().slice(0, 5).map((flow) => (
+                      {recentPingEvents.slice().reverse().slice(0, 5).map((flow) => (
                         <div
                           key={flow.id}
                           className="list-group-item list-group-item-action"
@@ -515,6 +470,11 @@ export default function Dashboard() {
                               {flow.status || 'active'}
                             </span>
                           </div>
+                          {flow.output ? (
+                            <div className="mt-1">
+                              <small className="text-muted">{flow.output}</small>
+                            </div>
+                          ) : null}
                         </div>
                       ))}
                     </div>

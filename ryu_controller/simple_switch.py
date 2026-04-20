@@ -212,6 +212,29 @@ class AdvancedSDNController(app_manager.RyuApp):
                     except RequestException:
                         pass
 
+                    # publish a canonical ping event so Flask can store it and the dashboard can show it
+                    try:
+                        ping_payload = {
+                            'src': src_host,
+                            'dst': dst_host,
+                            'src_host': src_host,
+                            'dst_host': dst_host,
+                            'src_ip': src_ip,
+                            'dst_ip': dst_ip,
+                            'protocol': 'ICMP',
+                            'bytes': 64,
+                            'packets': 1,
+                            'latency_ms': round(random.uniform(1.0, 80.0), 3),
+                            'status': 'success',
+                            'command': f'ping {src_host} {dst_host}',
+                            'origin': 'ryu',
+                            'attack_detected': src_ip in self.blocked_ips,
+                            'generated_alerts': [],
+                        }
+                        requests.post('http://127.0.0.1:5000/api/pings/ingest', json=ping_payload, timeout=1)
+                    except RequestException:
+                        pass
+
                     # also POST a richer controller report (flows + switches + attackers)
                     try:
                         flow_payload = [{

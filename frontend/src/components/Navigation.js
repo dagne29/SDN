@@ -26,10 +26,24 @@ export default function Navigation() {
   const tabs = [
     { id: 'overview', path: '/', label: 'Dashboard', icon: 'Dashboard' },
     { id: 'topology', path: '/topology', label: 'Topology', icon: 'Topology' },
-    { id: 'traffic', path: '/traffic', label: 'Traffic', icon: 'Traffic', badge: recentPingFlows.length },
+    { id: 'traffic', path: '/traffic', label: 'Traffic', icon: 'Traffic', badge: recentPingFlows.length, children: [
+      { id: 'traffic.overview', path: '/traffic', label: 'Overview' },
+      { id: 'traffic.live', path: '/traffic/live', label: 'Live Traffic' },
+      { id: 'traffic.table', path: '/traffic/table', label: 'Flow Table' },
+      { id: 'traffic.pings', path: '/traffic/pings', label: 'Ping Results' },
+      { id: 'traffic.analyzer', path: '/traffic/analyzer', label: 'Analyzer' },
+      { id: 'traffic.attack', path: '/traffic/attack', label: 'Attack Traffic' },
+      { id: 'traffic.history', path: '/traffic/history', label: 'History' },
+      { id: 'traffic.filters', path: '/traffic/filters', label: 'Filters' },
+    ] },
     { id: 'controller', path: '/controller', label: 'Controller', icon: 'Controller', children: [
       { id: 'controller.overview', path: '/controller', label: 'Overview' },
+      { id: 'controller.status', path: '/controller/status', label: 'Network Status' },
+      { id: 'controller.switches', path: '/controller/switches', label: 'Switch & Host Monitoring' },
       { id: 'controller.flows', path: '/controller/flows', label: 'Flows' },
+      { id: 'controller.traffic', path: '/controller/traffic', label: 'Traffic Control' },
+      { id: 'controller.ids', path: '/controller/ids', label: 'IDS / Security' },
+      { id: 'controller.logs', path: '/controller/logs', label: 'Logs & Performance' },
     ] },
     { id: 'ids', path: '/alerts', label: 'IDS Alerts', icon: 'IDS' }
   ];
@@ -74,6 +88,11 @@ export default function Navigation() {
                           <span>{flow.packets} pkts | {flow.bytes} bytes</span>
                           <span>{flow.latency_ms ? `${flow.latency_ms} ms` : '—'}</span>
                         </div>
+                        {flow.output ? (
+                          <div className="traffic-activity-meta">
+                            <span style={{ whiteSpace: 'normal' }}>{flow.output}</span>
+                          </div>
+                        ) : null}
                         <div className="traffic-activity-meta">
                           <span><code>{flow.id}</code></span>
                           <span>{flow.timestamp}</span>
@@ -88,7 +107,12 @@ export default function Navigation() {
               {tab.children && isActive ? (
                 <div style={{ marginLeft: 18, marginTop: 6, display: 'flex', flexDirection: 'column', gap: 6 }}>
                   {tab.children.map(child => (
-                    <Link key={child.id} to={child.path} className={`sidebar-link`} style={{ padding: '6px 10px', fontWeight: 500 }}>
+                    <Link
+                      key={child.id}
+                      to={child.path}
+                      className={`sidebar-link ${location.pathname === child.path ? 'active' : ''}`}
+                      style={{ padding: '6px 10px', fontWeight: 500 }}
+                    >
                       <span style={{ fontSize: 13 }}>{child.label}</span>
                     </Link>
                   ))}

@@ -1,12 +1,54 @@
-import React, { useState, useEffect } from 'react';
-import { idsAPI } from '../services/api';
+import React, { useEffect, useMemo, useState } from 'react';
+import { idsAPI, pingAPI } from '../services/api';
+
+const sections = [
+  { key: 'overview', label: 'Overview' },
+  { key: 'list', label: 'Alert List' },
+  { key: 'details', label: 'Alert Details' },
+  { key: 'severity', label: 'Severity Levels' },
+  { key: 'status', label: 'Status' },
+  { key: 'actions', label: 'Actions' },
+  { key: 'filters', label: 'Filters' },
+  { key: 'history', label: 'History' },
+];
+
+const severityOptions = ['all', 'Critical', 'High', 'Medium', 'Low'];
+const statusOptions = ['all', 'new', 'acknowledged', 'blocked', 'resolved'];
+
+function SeverityBadge({ severity }) {
+  const color = {
+    Critical: 'danger',
+    High: 'warning',
+    Medium: 'info',
+    Low: 'secondary',
+  }[severity] || 'dark';
+
+  return <span className={`badge bg-${color}`}>{severity || 'Unknown'}</span>;
+}
+
+function StatusBadge({ status }) {
+  const color = {
+    new: 'danger',
+    acknowledged: 'warning text-dark',
+    blocked: 'dark',
+    resolved: 'success',
+  }[(status || 'new').toLowerCase()] || 'secondary';
+
+  return <span className={`badge bg-${color}`}>{status || 'new'}</span>;
+}
 
 export default function IDSAlerts() {
   const [alerts, setAlerts] = useState([]);
   const [stats, setStats] = useState(null);
   const [rules, setRules] = useState([]);
+  const [attackPings, setAttackPings] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState('all');
+  const [activeSection, setActiveSection] = useState('overview');
+  const [selectedAlertId, setSelectedAlertId] = useState(null);
+  const [severityFilter, setSeverityFilter] = useState('all');
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [historyLimit, setHistoryLimit] = useState(10);
+  const [actionMessage, setActionMessage] = useState('');
 
   useEffect(() => {
     fetchAlertsData();
@@ -17,195 +59,542 @@ export default function IDSAlerts() {
   const fetchAlertsData = async () => {
     try {
       const [alertsRes, statsRes, rulesRes] = await Promise.all([
-        idsAPI.getAlerts(),
+        idsAPI.getAlerts(100),
         idsAPI.getStatistics(),
-        idsAPI.getRules()
+        idsAPI.getRules(),
       ]);
-      setAlerts(alertsRes.data);
-      setStats(statsRes.data);
-      setRules(rulesRes.data);
+      const pingsRes = await pingAPI.getAll({ limit: 100, attackOnly: true });
+
+      const nextAlerts = alertsRes.data || [];
+      setAlerts(nextAlerts);
+      setStats(statsRes.data || null);
+      setRules(rulesRes.data || []);
+      setAttackPings(pingsRes.data || []);
+      setSelectedAlertId((current) => current || nextAlerts[0]?.id || null);
       setLoading(false);
     } catch (error) {
       console.error('Error fetching alerts:', error);
     }
   };
 
-  const getSeverityColor = (severity) => {
-    switch (severity) {
-      case 'Critical': return 'danger';
-      case 'High': return 'warning';
-      case 'Medium': return 'info';
-      case 'Low': return 'secondary';
-      default: return 'gray';
+  const selectedAlert = useMemo(
+    () => alerts.find((alert) => alert.id === selectedAlertId) || alerts[0] || null,
+    [alerts, selectedAlertId]
+  );
+
+  const filteredAlerts = useMemo(() => {
+    return alerts.filter((alert) => {
+      const severityMatch = severityFilter === 'all' || alert.severity === severityFilter;
+      const statusMatch = statusFilter === 'all' || (alert.status || 'new').toLowerCase() === statusFilter;
+      return severityMatch && statusMatch;
+    });
+  }, [alerts, severityFilter, statusFilter]);
+
+  const counts = useMemo(() => {
+    return alerts.reduce((acc, alert) => {
+      const severity = alert.severity || 'Unknown';
+      const status = (alert.status || 'new').toLowerCase();
+      acc.severity[severity] = (acc.severity[severity] || 0) + 1;
+      acc.status[status] = (acc.status[status] || 0) + 1;
+      return acc;
+    }, { severity: {}, status: {} });
+  }, [alerts]);
+
+  const updateAlertStatus = async (alertId, action) => {
+    if (!alertId) return;
+    try {
+      if (action === 'block') await idsAPI.blockAlert(alertId);
+      if (action === 'clear') await idsAPI.clearAlert(alertId);
+      if (action === 'acknowledge') await idsAPI.acknowledgeAlert(alertId);
+      if (action === 'resolve') await idsAPI.resolveAlert(alertId);
+
+      const label = {
+        block: 'blocked',
+        clear: 'cleared',
+        acknowledge: 'acknowledged',
+        resolve: 'resolved',
+      }[action] || action;
+
+      setActionMessage(`Alert ${alertId} ${label}.`);
+      fetchAlertsData();
+    } catch (error) {
+      console.error(`Error performing ${action} on alert`, error);
+      setActionMessage(`Unable to ${action} alert ${alertId}.`);
     }
   };
 
-  const getStatusBadge = (status) => {
-    switch (status) {
-      case 'new': return 'badge bg-danger';
-      case 'acknowledged': return 'badge bg-warning';
-      case 'resolved': return 'badge bg-success';
-      default: return 'badge bg-secondary';
-    }
-  };
-
-  const filteredAlerts = filter === 'all' ? alerts : alerts.filter((a) => a.severity === filter);
+  const historyItems = filteredAlerts.slice().reverse().slice(0, historyLimit);
+  const activeCount = counts.status.new || 0;
+  const blockedCount = counts.status.blocked || 0;
+  const resolvedCount = counts.status.resolved || 0;
+  const criticalCount = counts.severity.Critical || 0;
 
   if (loading) return <div className="p-5 text-center">Loading alerts...</div>;
 
   return (
     <div className="container-fluid p-4">
-      <h2 className="mb-4">IDS - Intrusion Detection System</h2>
-      
-      {/* Stats Cards */}
+      <div className="d-flex flex-column flex-lg-row justify-content-between align-items-lg-center gap-3 mb-3">
+        <div>
+          <h2 className="mb-1">IDS Alerts</h2>
+          <p className="text-muted mb-0">Controller-style alert management for attack info, details, severity, status, actions, filters, and history.</p>
+        </div>
+        <div className="text-muted small">
+          {alerts.length} alerts total, {stats?.blocked_sources || 0} blocked sources, {stats?.detection_rate || '0%'} detection rate
+        </div>
+      </div>
+
+      <div className="d-flex flex-wrap gap-2 mb-4">
+        {sections.map((section) => (
+          <button
+            key={section.key}
+            type="button"
+            className={`btn btn-sm ${activeSection === section.key ? 'btn-danger' : 'btn-outline-danger'}`}
+            onClick={() => setActiveSection(section.key)}
+          >
+            {section.label}
+          </button>
+        ))}
+      </div>
+
       <div className="row g-4 mb-4">
+          <div className="col-12 col-sm-6 col-xl-3">
+            <div className="card h-100 border-danger shadow-sm">
+              <div className="card-body">
+                <div className="text-muted small">Total Alerts</div>
+                <div className="fs-3 fw-bold text-danger">{stats?.total_alerts || alerts.length}</div>
+                <div className="small text-muted">All detected incidents</div>
+              </div>
+            </div>
+          </div>
         <div className="col-12 col-sm-6 col-xl-3">
-          <div className="card border-danger">
-            <div className="card-body text-center">
-              <h6 className="text-muted">Total Alerts</h6>
-              <h4 className="text-danger">{stats?.total_alerts || 0}</h4>
+          <div className="card h-100 border-dark shadow-sm">
+            <div className="card-body">
+              <div className="text-muted small">Critical</div>
+              <div className="fs-3 fw-bold text-dark">{stats?.critical_alerts || criticalCount}</div>
+              <div className="small text-muted">Highest-priority threats</div>
             </div>
           </div>
         </div>
         <div className="col-12 col-sm-6 col-xl-3">
-          <div className="card border-dark">
-            <div className="card-body text-center">
-              <h6 className="text-muted">Critical</h6>
-              <h4 className="text-dark">{stats?.critical_alerts || 0}</h4>
+          <div className="card h-100 border-warning shadow-sm">
+            <div className="card-body">
+              <div className="text-muted small">Active</div>
+              <div className="fs-3 fw-bold text-warning">{activeCount}</div>
+              <div className="small text-muted">New or unhandled alerts</div>
             </div>
           </div>
         </div>
         <div className="col-12 col-sm-6 col-xl-3">
-          <div className="card border-warning">
-            <div className="card-body text-center">
-              <h6 className="text-muted">High Severity</h6>
-              <h4 className="text-warning">{stats?.high_alerts || 0}</h4>
-            </div>
-          </div>
-        </div>
-        <div className="col-12 col-sm-6 col-xl-3">
-          <div className="card border-info">
-            <div className="card-body text-center">
-              <h6 className="text-muted">Detection Rate</h6>
-              <h4 className="text-info">{stats?.detection_rate || '0%'}</h4>
+          <div className="card h-100 border-info shadow-sm">
+            <div className="card-body">
+              <div className="text-muted small">Resolved</div>
+              <div className="fs-3 fw-bold text-info">{resolvedCount}</div>
+              <div className="small text-muted">Closed incidents</div>
             </div>
           </div>
         </div>
       </div>
 
-      {/* Filter Controls */}
-      <div className="mb-3">
-        <div className="btn-group" role="group">
-          <button
-            type="button"
-            className={`btn btn-outline-secondary ${filter === 'all' ? 'active' : ''}`}
-            onClick={() => setFilter('all')}
-          >
-            All Alerts
-          </button>
-          <button
-            type="button"
-            className={`btn btn-outline-danger ${filter === 'Critical' ? 'active' : ''}`}
-            onClick={() => setFilter('Critical')}
-          >
-            Critical
-          </button>
-          <button
-            type="button"
-            className={`btn btn-outline-warning ${filter === 'High' ? 'active' : ''}`}
-            onClick={() => setFilter('High')}
-          >
-            High
-          </button>
-          <button
-            type="button"
-            className={`btn btn-outline-info ${filter === 'Medium' ? 'active' : ''}`}
-            onClick={() => setFilter('Medium')}
-          >
-            Medium
-          </button>
-        </div>
-      </div>
+      {actionMessage ? <div className="alert alert-info py-2">{actionMessage}</div> : null}
 
-      {/* Alerts Table */}
-      <div className="card">
-        <div className="card-header bg-dark text-white">
-          <h5 className="mb-0">Security Alerts ({filteredAlerts.length})</h5>
-        </div>
-        <div className="card-body p-0">
-          <div className="table-responsive">
-            <table className="table table-hover mb-0">
-              <thead className="table-light">
-                <tr>
-                  <th>Timestamp</th>
-                  <th>Type</th>
-                  <th>Source IP</th>
-                  <th>Destination IP</th>
-                  <th>Severity</th>
-                  <th>Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredAlerts.length > 0 ? filteredAlerts.map((alert, idx) => (
-                  <tr key={idx}>
-                    <td><small>{new Date(alert.timestamp).toLocaleString()}</small></td>
-                    <td><strong>{alert.type}</strong></td>
-                    <td><code>{alert.source_ip}</code></td>
-                    <td><code>{alert.destination_ip}</code></td>
-                    <td>
-                      <span className={`badge bg-${getSeverityColor(alert.severity)}`}>
-                        {alert.severity}
-                      </span>
-                    </td>
-                    <td>
-                      <span className={getStatusBadge(alert.status)}>
-                        {alert.status}
-                      </span>
-                    </td>
-                  </tr>
-                )) : (
-                  <tr>
-                    <td colSpan="6" className="text-center text-muted py-3">
-                      No alerts for this filter
-                    </td>
-                  </tr>
+      {activeSection === 'overview' ? (
+        <div className="row g-4">
+          <div className="col-12 col-lg-6">
+            <div className="card h-100 shadow-sm">
+              <div className="card-header bg-dark text-white"><strong>Alert Summary</strong></div>
+              <div className="card-body">
+                <div className="d-flex justify-content-between border-bottom py-2"><span>New</span><span>{counts.status.new || 0}</span></div>
+                <div className="d-flex justify-content-between border-bottom py-2"><span>Acknowledged</span><span>{counts.status.acknowledged || 0}</span></div>
+                <div className="d-flex justify-content-between border-bottom py-2"><span>Blocked</span><span>{counts.status.blocked || 0}</span></div>
+                <div className="d-flex justify-content-between pt-2"><span>Resolved</span><span>{counts.status.resolved || 0}</span></div>
+                <div className="d-flex justify-content-between pt-2"><span>Attack Pings</span><span>{attackPings.length}</span></div>
+              </div>
+            </div>
+          </div>
+          <div className="col-12 col-lg-6">
+            <div className="card h-100 shadow-sm">
+              <div className="card-header bg-danger text-white"><strong>Latest Case</strong></div>
+              <div className="card-body">
+                {selectedAlert ? (
+                  <>
+                    <div className="fw-semibold">{selectedAlert.type}</div>
+                    <div className="small text-muted">{selectedAlert.source_host} → {selectedAlert.destination_host}</div>
+                    <div className="mt-3">
+                      <SeverityBadge severity={selectedAlert.severity} />
+                      <span className="mx-2" />
+                      <StatusBadge status={selectedAlert.status} />
+                    </div>
+                    <p className="mt-3 mb-0">{selectedAlert.reason || 'No reason provided.'}</p>
+                  </>
+                ) : (
+                  <p className="text-muted mb-0">No alerts available.</p>
                 )}
-              </tbody>
-            </table>
+              </div>
+            </div>
           </div>
         </div>
-      </div>
+      ) : null}
 
-      {/* Threat Rules */}
-      <div className="card mt-4">
-        <div className="card-header bg-success text-white">
-          <h5 className="mb-0">Active Detection Rules</h5>
-        </div>
-        <div className="card-body p-0">
-          <div className="table-responsive">
-            <table className="table table-sm mb-0">
-              <thead className="table-light">
-                <tr>
-                  <th>Rule ID</th>
-                  <th>Rule Name</th>
-                  <th>Status</th>
-                  <th>Hits</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rules.map((rule) => (
-                  <tr key={rule.id}>
-                    <td>{rule.id}</td>
-                    <td>{rule.name}</td>
-                    <td><span className="badge bg-success">{rule.status}</span></td>
-                    <td>{rule.hits}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+      {activeSection === 'list' ? (
+        <div className="row g-4">
+          <div className="col-12 col-xl-5">
+            <div className="card h-100 shadow-sm">
+              <div className="card-header bg-dark text-white d-flex justify-content-between align-items-center">
+                <strong>Alert List</strong>
+                <span className="badge bg-light text-dark">{filteredAlerts.length}</span>
+              </div>
+              <div className="card-body border-bottom">
+                <p className="text-muted mb-3">Attack info appears here. Pick an alert to load the details panel on the right.</p>
+                <div className="list-group" style={{ maxHeight: '68vh', overflowY: 'auto' }}>
+                  {filteredAlerts.length ? filteredAlerts.map((alert) => (
+                    <button
+                      key={alert.id}
+                      type="button"
+                      className={`list-group-item list-group-item-action ${selectedAlert?.id === alert.id ? 'active' : ''}`}
+                      onClick={() => setSelectedAlertId(alert.id)}
+                      style={{ textAlign: 'left' }}
+                    >
+                      <div className="d-flex justify-content-between align-items-start gap-2">
+                        <div>
+                          <div className="fw-semibold">{alert.type}</div>
+                          <div className="small opacity-75">{alert.source_host} → {alert.destination_host}</div>
+                        </div>
+                        <SeverityBadge severity={alert.severity} />
+                      </div>
+                      <div className="d-flex justify-content-between align-items-center mt-2">
+                        <StatusBadge status={alert.status} />
+                        <small className="opacity-75">{new Date(alert.timestamp).toLocaleString()}</small>
+                      </div>
+                    </button>
+                  )) : (
+                    <div className="p-4 text-center text-muted">No alerts for this filter</div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+          <div className="col-12 col-xl-7">
+            <div className="card h-100 shadow-sm">
+              <div className="card-header bg-danger text-white"><strong>Alert Details</strong></div>
+              <div className="card-body">
+                {selectedAlert ? (
+                  <table className="table table-borderless mb-0">
+                    <tbody>
+                      <tr><th style={{ width: 180 }}>Alert ID</th><td>{selectedAlert.id}</td></tr>
+                      <tr><th>Type</th><td>{selectedAlert.type}</td></tr>
+                      <tr><th>Severity</th><td><SeverityBadge severity={selectedAlert.severity} /></td></tr>
+                      <tr><th>Status</th><td><StatusBadge status={selectedAlert.status} /></td></tr>
+                      <tr><th>Source Host</th><td>{selectedAlert.source_host}</td></tr>
+                      <tr><th>Source IP</th><td>{selectedAlert.source_ip}</td></tr>
+                      <tr><th>Destination Host</th><td>{selectedAlert.destination_host}</td></tr>
+                      <tr><th>Destination IP</th><td>{selectedAlert.destination_ip}</td></tr>
+                      <tr><th>Reason</th><td>{selectedAlert.reason || '—'}</td></tr>
+                      <tr><th>Timestamp</th><td>{selectedAlert.timestamp}</td></tr>
+                    </tbody>
+                  </table>
+                ) : (
+                  <p className="text-muted mb-0">Select an alert from the left list to view details.</p>
+                )}
+              </div>
+            </div>
           </div>
         </div>
-      </div>
+      ) : null}
+
+      {activeSection === 'details' ? (
+        <div className="row g-4">
+          <div className="col-12 col-lg-7">
+            <div className="card h-100 shadow-sm">
+              <div className="card-header bg-danger text-white"><strong>Alert Details</strong></div>
+              <div className="card-body">
+                {selectedAlert ? (
+                  <table className="table table-borderless mb-0">
+                    <tbody>
+                      <tr><th style={{ width: 180 }}>Alert ID</th><td>{selectedAlert.id}</td></tr>
+                      <tr><th>Type</th><td>{selectedAlert.type}</td></tr>
+                      <tr><th>Severity</th><td><SeverityBadge severity={selectedAlert.severity} /></td></tr>
+                      <tr><th>Status</th><td><StatusBadge status={selectedAlert.status} /></td></tr>
+                      <tr><th>Source Host</th><td>{selectedAlert.source_host}</td></tr>
+                      <tr><th>Source IP</th><td>{selectedAlert.source_ip}</td></tr>
+                      <tr><th>Destination Host</th><td>{selectedAlert.destination_host}</td></tr>
+                      <tr><th>Destination IP</th><td>{selectedAlert.destination_ip}</td></tr>
+                      <tr><th>Reason</th><td>{selectedAlert.reason || '—'}</td></tr>
+                      <tr><th>Timestamp</th><td>{selectedAlert.timestamp}</td></tr>
+                    </tbody>
+                  </table>
+                ) : (
+                  <p className="text-muted mb-0">Select an alert to view details.</p>
+                )}
+              </div>
+            </div>
+          </div>
+          <div className="col-12 col-lg-5">
+            <div className="card h-100 shadow-sm">
+              <div className="card-header bg-dark text-white"><strong>Actions</strong></div>
+              <div className="card-body">
+                {selectedAlert ? (
+                  <>
+                    <p className="text-muted">Control alert <code>{selectedAlert.id}</code></p>
+                    <div className="d-flex flex-wrap gap-2">
+                      <button className="btn btn-dark" onClick={() => updateAlertStatus(selectedAlert.id, 'block')}>Block</button>
+                      <button className="btn btn-success" onClick={() => updateAlertStatus(selectedAlert.id, 'clear')}>Clear</button>
+                      <button className="btn btn-outline-warning" onClick={() => updateAlertStatus(selectedAlert.id, 'acknowledge')}>Acknowledge</button>
+                      <button className="btn btn-outline-secondary" onClick={() => updateAlertStatus(selectedAlert.id, 'resolve')}>Resolve</button>
+                    </div>
+                  </>
+                ) : (
+                  <p className="text-muted mb-0">Pick an alert before using actions.</p>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {activeSection === 'severity' ? (
+        <div className="row g-4">
+          {severityOptions.filter((item) => item !== 'all').map((severity) => (
+            <div className="col-12 col-sm-6 col-xl-3" key={severity}>
+              <div className={`card h-100 shadow-sm border-${{
+                Critical: 'dark',
+                High: 'warning',
+                Medium: 'info',
+                Low: 'secondary',
+              }[severity] || 'secondary'}`}>
+                <div className="card-body text-center">
+                  <div className="text-muted small">{severity}</div>
+                  <div className={`fs-3 fw-bold text-${{
+                    Critical: 'dark',
+                    High: 'warning',
+                    Medium: 'info',
+                    Low: 'secondary',
+                  }[severity] || 'secondary'}`}>{counts.severity[severity] || 0}</div>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : null}
+
+      {activeSection === 'status' ? (
+        <div className="row g-4">
+          <div className="col-12 col-lg-6">
+            <div className="card h-100 shadow-sm">
+              <div className="card-header bg-warning text-dark"><strong>Status</strong></div>
+              <div className="card-body">
+                <div className="d-flex justify-content-between border-bottom py-2"><span>Active</span><span>{activeCount}</span></div>
+                <div className="d-flex justify-content-between border-bottom py-2"><span>Acknowledged</span><span>{counts.status.acknowledged || 0}</span></div>
+                <div className="d-flex justify-content-between border-bottom py-2"><span>Blocked</span><span>{blockedCount}</span></div>
+                <div className="d-flex justify-content-between pt-2"><span>Resolved</span><span>{resolvedCount}</span></div>
+              </div>
+            </div>
+          </div>
+          <div className="col-12 col-lg-6">
+            <div className="card h-100 shadow-sm">
+              <div className="card-header bg-dark text-white"><strong>Severity Levels</strong></div>
+              <div className="card-body">
+                {severityOptions.filter((item) => item !== 'all').map((severity) => (
+                  <div key={severity} className="d-flex justify-content-between border-bottom py-2">
+                    <span>{severity}</span>
+                    <span>{counts.severity[severity] || 0}</span>
+                  </div>
+                ))}
+                <div className="d-flex justify-content-between pt-2">
+                  <span>Attack Pings</span>
+                  <span>{attackPings.length}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {activeSection === 'actions' ? (
+        <div className="row g-4">
+          <div className="col-12 col-lg-6">
+            <div className="card h-100 shadow-sm">
+              <div className="card-header bg-dark text-white"><strong>Actions</strong></div>
+              <div className="card-body">
+                {selectedAlert ? (
+                  <>
+                    <p className="text-muted">Selected alert: <code>{selectedAlert.id}</code></p>
+                    <div className="d-flex flex-wrap gap-2">
+                      <button className="btn btn-dark" onClick={() => updateAlertStatus(selectedAlert.id, 'block')}>Block</button>
+                      <button className="btn btn-success" onClick={() => updateAlertStatus(selectedAlert.id, 'clear')}>Clear</button>
+                    </div>
+                  </>
+                ) : (
+                  <p className="text-muted mb-0">Select an alert before using actions.</p>
+                )}
+              </div>
+            </div>
+          </div>
+          <div className="col-12 col-lg-6">
+            <div className="card h-100 shadow-sm">
+              <div className="card-header bg-warning text-dark"><strong>Attack Status</strong></div>
+              <div className="card-body">
+                <div className="d-flex justify-content-between border-bottom py-2"><span>Active</span><span>{activeCount}</span></div>
+                <div className="d-flex justify-content-between border-bottom py-2"><span>Blocked</span><span>{blockedCount}</span></div>
+                <div className="d-flex justify-content-between pt-2"><span>Resolved</span><span>{resolvedCount}</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {activeSection === 'filters' ? (
+        <div className="row g-4">
+          <div className="col-12 col-lg-4">
+            <div className="card h-100 shadow-sm">
+              <div className="card-header bg-danger text-white"><strong>Filters</strong></div>
+              <div className="card-body">
+                <div className="mb-3">
+                  <label className="form-label">Severity</label>
+                  <select className="form-select" value={severityFilter} onChange={(e) => setSeverityFilter(e.target.value)}>
+                    {severityOptions.map((severity) => (
+                      <option key={severity} value={severity}>{severity === 'all' ? 'All severities' : severity}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="mb-3">
+                  <label className="form-label">Status</label>
+                  <select className="form-select" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+                    {statusOptions.map((status) => (
+                      <option key={status} value={status}>{status === 'all' ? 'All statuses' : status}</option>
+                    ))}
+                  </select>
+                </div>
+                <button
+                  className="btn btn-outline-secondary btn-sm"
+                  onClick={() => {
+                    setSeverityFilter('all');
+                    setStatusFilter('all');
+                  }}
+                >
+                  Clear Filters
+                </button>
+              </div>
+            </div>
+          </div>
+          <div className="col-12 col-lg-8">
+            <div className="card h-100 shadow-sm">
+              <div className="card-header bg-dark text-white"><strong>Filtered Alerts</strong></div>
+              <div className="card-body p-0">
+                <div className="table-responsive">
+                  <table className="table table-hover mb-0">
+                    <thead className="table-light">
+                      <tr>
+                        <th>Alert</th>
+                        <th>Severity</th>
+                        <th>Status</th>
+                        <th>Source</th>
+                        <th>Destination</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredAlerts.length ? filteredAlerts.map((alert) => (
+                        <tr key={alert.id} style={{ cursor: 'pointer' }} onClick={() => setSelectedAlertId(alert.id)}>
+                          <td>{alert.type}</td>
+                          <td><SeverityBadge severity={alert.severity} /></td>
+                          <td><StatusBadge status={alert.status} /></td>
+                          <td>{alert.source_host} ({alert.source_ip})</td>
+                          <td>{alert.destination_host} ({alert.destination_ip})</td>
+                        </tr>
+                      )) : (
+                        <tr>
+                          <td colSpan="5" className="text-center text-muted py-3">No alerts for this filter</td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {activeSection === 'history' ? (
+        <div className="row g-4">
+          <div className="col-12 col-lg-7">
+            <div className="card h-100 shadow-sm">
+              <div className="card-header bg-dark text-white"><strong>History</strong></div>
+              <div className="card-body">
+                <label className="form-label">Items shown</label>
+                <input
+                  type="range"
+                  className="form-range"
+                  min="5"
+                  max="50"
+                  step="1"
+                  value={historyLimit}
+                  onChange={(e) => setHistoryLimit(Number(e.target.value))}
+                />
+                <div className="small text-muted mb-3">{historyLimit} recent alerts</div>
+                <div className="list-group">
+                  {historyItems.map((alert) => (
+                    <button
+                      key={alert.id}
+                      type="button"
+                      className="list-group-item list-group-item-action"
+                      onClick={() => setSelectedAlertId(alert.id)}
+                    >
+                      <div className="d-flex justify-content-between">
+                        <strong>{alert.type}</strong>
+                        <StatusBadge status={alert.status} />
+                      </div>
+                      <div className="small text-muted">{alert.source_host} → {alert.destination_host}</div>
+                      <div className="small text-muted">{alert.timestamp}</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+          <div className="col-12 col-lg-5">
+            <div className="card h-100 shadow-sm">
+              <div className="card-header bg-secondary text-white"><strong>Rules Snapshot</strong></div>
+              <div className="card-body p-0">
+                <div className="table-responsive">
+                  <table className="table table-sm mb-0">
+                    <thead className="table-light">
+                      <tr>
+                        <th>Rule ID</th>
+                        <th>Rule Name</th>
+                        <th>Hits</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {rules.map((rule) => (
+                        <tr key={rule.id}>
+                          <td>{rule.id}</td>
+                          <td>{rule.name}</td>
+                          <td>{rule.hits}</td>
+                        </tr>
+                      ))}
+                      {!rules.length ? (
+                        <tr>
+                          <td colSpan="3" className="text-center text-muted py-3">No rules available</td>
+                        </tr>
+                      ) : null}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="p-3 border-top">
+                  <div className="fw-semibold mb-2">Attack Ping Feed</div>
+                  {attackPings.slice().reverse().slice(0, 8).map((ping) => (
+                    <div key={ping.id} className="border-bottom py-2">
+                      <div className="small fw-semibold">{ping.src_host} → {ping.dst_host}</div>
+                      <div className="small text-muted">{ping.command}</div>
+                    </div>
+                  ))}
+                  {!attackPings.length ? <div className="text-muted small">No attack pings detected yet.</div> : null}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

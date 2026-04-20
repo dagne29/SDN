@@ -1,17 +1,22 @@
 import React, { useEffect, useState } from 'react';
-import { controllerAPI } from '../services/api';
+import { controllerAPI, pingAPI } from '../services/api';
 import { useNavigate } from 'react-router-dom';
 
 export default function ControllerFlows() {
   const [flows, setFlows] = useState([]);
+  const [pingEvents, setPingEvents] = useState([]);
   const [loading, setLoading] = useState(true);
   const navigate = useNavigate();
 
   useEffect(() => {
     const load = async () => {
       try {
-        const res = await controllerAPI.getFlows();
-        setFlows(res.data || []);
+        const [controllerRes, pingRes] = await Promise.all([
+          controllerAPI.getFlows(),
+          pingAPI.getAll({ limit: 100 }),
+        ]);
+        setFlows(controllerRes.data || []);
+        setPingEvents(pingRes.data || []);
       } catch (err) {
         console.error('Error loading controller flows', err);
       } finally {
@@ -33,14 +38,21 @@ export default function ControllerFlows() {
   return (
     <div className="container-fluid p-4">
       <h2 className="mb-4">Controller Ping Flows</h2>
+      <p className="text-muted mb-3">
+        Showing ping activity from the shared ping store, plus any controller flow records that were tagged as ping.
+      </p>
       {(() => {
-        const pingFlows = (flows || []).filter(f => {
+        const pingFlows = [
+          ...(pingEvents || []),
+          ...(flows || []).filter(f => {
           if (!f) return false;
           const activityType = (f.activity_type || '').toString().toLowerCase();
           const cmd = (f.command || '').toString().toLowerCase();
           return activityType === 'ping' || cmd.includes('ping');
-        });
-        return pingFlows.length ? (
+          }),
+        ];
+        const uniqueFlows = Array.from(new Map(pingFlows.map((flow) => [flow.id || `${flow.src_host}-${flow.dst_host}-${flow.timestamp}`, flow])).values());
+        return uniqueFlows.length ? (
         <div className="table-responsive">
           <table className="table table-sm">
             <thead>
@@ -51,10 +63,11 @@ export default function ControllerFlows() {
                 <th>Proto</th>
                 <th>Bytes</th>
                 <th>Latency</th>
+                <th>Output</th>
               </tr>
             </thead>
             <tbody>
-              {pingFlows.slice().reverse().map(f => (
+              {uniqueFlows.slice().reverse().map(f => (
                 <tr key={f.id} style={{ cursor: 'pointer' }} onClick={() => navigate(`/flows/${f.id}`)}>
                   <td>{f.id}</td>
                   <td>{f.src_host || f.src_ip}</td>
@@ -62,6 +75,7 @@ export default function ControllerFlows() {
                   <td>{f.protocol}</td>
                   <td>{f.bytes}</td>
                   <td>{f.latency_ms ? `${f.latency_ms} ms` : '—'}</td>
+                  <td className="text-muted" style={{ maxWidth: 360, whiteSpace: 'normal' }}>{f.output || '—'}</td>
                 </tr>
               ))}
             </tbody>

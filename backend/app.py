@@ -47,6 +47,7 @@ class NetworkState:
         ]
         self.flows = []
         self.alerts = []
+        self.ping_events = []
         self.blocked_ips = []
         self.ids_rules = [
             {"id": "R1", "name": "Detect ICMP flood patterns", "status": "Enabled", "hits": 0},
@@ -57,6 +58,7 @@ class NetworkState:
         self.request_log = []
         self.flow_counter = 0
         self.alert_counter = 0
+        self.ping_counter = 0
         self.lock = threading.Lock()
 
     def host_names(self):
@@ -110,6 +112,93 @@ def create_alert(source, destination, alert_type, severity, reason):
     if source["ip"] not in net.blocked_ips:
         net.blocked_ips.append(source["ip"])
     return alert
+
+
+def record_ping_event(flow, alerts, source_host, destination_host, origin="mininet"):
+    net.ping_counter += 1
+    output = flow.get("output") or (
+        f"64 bytes from {flow.get('dst_ip', '')}: icmp_seq=1 ttl=64 "
+        f"time={flow.get('latency_ms', 0)} ms"
+    )
+    latency_ms = flow.get("latency_ms", 0) or 0
+    ping_event = {
+        "id": f"PING-{net.ping_counter:04d}",
+        "flow_id": flow["id"],
+        "src_host": flow["src_host"],
+        "src_ip": flow["src_ip"],
+        "src_mac": flow["src_mac"],
+        "dst_host": flow["dst_host"],
+        "dst_ip": flow["dst_ip"],
+        "dst_mac": flow["dst_mac"],
+        "protocol": flow["protocol"],
+        "bytes": flow["bytes"],
+        "packets": flow["packets"],
+        "packets_transmitted": flow.get("packets_transmitted") or flow["packets"],
+        "packets_received": flow.get("packets_received") or flow["packets"],
+        "packet_loss_pct": flow.get("packet_loss_pct"),
+        "packet_loss": flow.get("packet_loss"),
+        "latency_ms": flow["latency_ms"],
+        "round_trip_time": flow.get("round_trip_time") or f"{latency_ms} ms",
+        "bandwidth_mbps": flow.get("bandwidth_mbps"),
+        "status": flow["status"],
+        "timestamp": flow["timestamp"],
+        "command": flow["command"],
+        "output": output,
+        "activity_type": "ping",
+        "origin": origin,
+        "attack_detected": any(
+            (alert.get("severity") or "").lower() in ("critical", "high") or "attack" in (alert.get("type") or "").lower()
+            for alert in alerts
+        ),
+        "generated_alerts": alerts,
+        "src": source_host,
+        "dst": destination_host,
+    }
+    net.ping_events.append(ping_event)
+    net.ping_events = net.ping_events[-200:]
+    return ping_event
+
+
+def ingest_ping_event(payload):
+    with net.lock:
+        net.ping_counter += 1
+        latency_ms = payload.get("latency_ms") or 0
+        ping_event = {
+            "id": payload.get("id") or f"PING-{net.ping_counter:04d}",
+            "flow_id": payload.get("flow_id") or payload.get("id") or f"FLOW-{net.flow_counter:04d}",
+            "src_host": payload.get("src_host") or payload.get("src") or "",
+            "src_ip": payload.get("src_ip") or "",
+            "src_mac": payload.get("src_mac") or "",
+            "dst_host": payload.get("dst_host") or payload.get("dst") or "",
+            "dst_ip": payload.get("dst_ip") or "",
+            "dst_mac": payload.get("dst_mac") or "",
+            "protocol": payload.get("protocol") or "ICMP",
+            "bytes": payload.get("bytes") or 64,
+            "packets": payload.get("packets") or 1,
+            "packets_transmitted": payload.get("packets_transmitted") or payload.get("packets") or 1,
+            "packets_received": payload.get("packets_received") or payload.get("packets") or 1,
+            "packet_loss_pct": payload.get("packet_loss_pct"),
+            "packet_loss": payload.get("packet_loss"),
+            "latency_ms": payload.get("latency_ms") or 0,
+            "round_trip_time": payload.get("round_trip_time") or (f"{latency_ms} ms" if latency_ms is not None else None),
+            "bandwidth_mbps": payload.get("bandwidth_mbps"),
+            "status": payload.get("status") or "success",
+            "timestamp": payload.get("timestamp") or now_iso(),
+            "command": payload.get("command") or "ping",
+            "output": payload.get("output") or (
+                f"64 bytes from {payload.get('dst_ip', '')}: icmp_seq=1 ttl=64 "
+                f"time={payload.get('latency_ms', 0)} ms"
+            ),
+            "activity_type": "ping",
+            "origin": payload.get("origin") or "terminal",
+            "attack_detected": bool(payload.get("attack_detected")),
+            "generated_alerts": payload.get("generated_alerts") or [],
+            "src": payload.get("src") or payload.get("src_host") or "",
+            "dst": payload.get("dst") or payload.get("dst_host") or "",
+        }
+        net.ping_events.append(ping_event)
+        net.ping_events = net.ping_events[-200:]
+        return ping_event
 
 
 def flow_status(source, destination):
@@ -226,7 +315,21 @@ def traffic_stats():
 
 
 def ping_flows():
-    return [flow for flow in net.flows if flow.get("activity_type") == "ping"]
+    return list(net.ping_events)
+
+
+def ping_stats():
+    pings = ping_flows()
+    total = len(pings)
+    successful = len([ping for ping in pings if (ping.get("status") or "").lower() == "success"])
+    suspicious = len([ping for ping in pings if ping.get("attack_detected") or (ping.get("status") or "").lower() == "suspicious"])
+    return {
+        "total_pings": total,
+        "successful_pings": successful,
+        "suspicious_pings": suspicious,
+        "latest_ping": pings[-1] if pings else None,
+        "recent_pings": pings[-10:],
+    }
 
 
 def topology_payload():
@@ -256,7 +359,7 @@ threading.Thread(target=background_traffic, daemon=True).start()
 @app.route("/api/dashboard")
 def dashboard():
     stats = traffic_stats()
-    recent_pings = ping_flows()[-10:]
+    ping_data = ping_stats()
     return jsonify({
         "network_status": {
             "controller": "running",
@@ -280,8 +383,9 @@ def dashboard():
             "high_load": stats["suspicious_flows"] > 0,
         },
         "recent_traffic": net.flows[-10:],
-        "recent_ping_traffic": recent_pings,
-        "last_ping_flow": recent_pings[-1] if recent_pings else None,
+        "recent_ping_traffic": ping_data["recent_pings"],
+        "last_ping_flow": ping_data["latest_ping"],
+        "last_ping_result": ping_data["latest_ping"],
         "active_alerts": net.alerts[-5:],
         "system_health": "good" if len(net.alerts) < 3 else "attention",
         "timestamp": now_iso(),
@@ -290,10 +394,19 @@ def dashboard():
 
 @app.route("/api/mininet/status")
 def mininet_status():
+    observed_hosts = set()
+    for ping in net.ping_events[-200:]:
+        src = ping.get("src_host") or ping.get("src")
+        dst = ping.get("dst_host") or ping.get("dst")
+        if src:
+            observed_hosts.add(src)
+        if dst:
+            observed_hosts.add(dst)
+    hosts = sorted(set(net.host_names()) | observed_hosts)
     return jsonify({
         "topology_running": True,
         "controller_connected": True,
-        "hosts": net.host_names(),
+        "hosts": hosts,
         "switches": list(net.switches.keys()),
         "links": net.links,
         "timestamp": now_iso(),
@@ -319,6 +432,8 @@ def mininet_connectivity():
 def mininet_ping(src, dst):
     latency = random.uniform(0.2, 4.5)
     flow, alerts = register_request(src, dst, "ICMP", 64, 1, latency, 0.08, command=f"ping -c4 {src} {dst}", activity_type="ping")
+    flow["output"] = f"64 bytes from {flow['dst_ip']}: icmp_seq=1 ttl=64 time={flow['latency_ms']} ms"
+    record_ping_event(flow, alerts, src, dst, origin="mininet")
     return jsonify({
         "command": f"ping {src} {dst}",
         "status": "success",
@@ -444,6 +559,7 @@ def controller_report():
         # Merge flows
         for flow in flows:
             net.flow_counter += 1
+            is_ping = (flow.get("activity_type") or "").lower() == "ping" or (flow.get("protocol") or "").upper() == "ICMP" or "ping" in (flow.get("command") or "").lower()
             flow_entry = {
                 'id': flow.get('id', f'FLOW-{net.flow_counter:04d}'),
                 'src_host': flow.get('src_host'),
@@ -458,9 +574,17 @@ def controller_report():
                 'status': flow.get('status', flow_status({'role': 'unknown'}, {'role': 'unknown'})),
                 'timestamp': now_iso(),
                 'command': flow.get('command'),
-                'activity_type': flow.get('activity_type', 'controller'),
+                'activity_type': flow.get('activity_type', 'ping' if is_ping else 'controller'),
             }
             net.flows.append(flow_entry)
+            if is_ping:
+                record_ping_event(
+                    flow_entry,
+                    flow.get("generated_alerts", []),
+                    flow_entry.get("src_host"),
+                    flow_entry.get("dst_host"),
+                    origin="controller",
+                )
         net.flows = net.flows[-200:]
 
         # Update switches metadata
@@ -497,34 +621,75 @@ def topology_nodes():
 
 @app.route("/api/traffic/flows")
 def traffic_flows():
-    return jsonify(list(reversed(net.flows[-50:])))
+    return jsonify(list(reversed(ping_flows()[-50:])))
 
 
 @app.route("/api/traffic/stats")
 @app.route("/api/traffic/summary")
 def traffic_summary():
-    return jsonify(traffic_stats())
+    stats = traffic_stats()
+    pstats = ping_stats()
+    return jsonify({
+        **stats,
+        **pstats,
+    })
 
 
 @app.route("/api/traffic/protocols")
 def traffic_protocols():
-    return jsonify(protocol_summary(net.flows[-50:]))
+    return jsonify(protocol_summary(ping_flows()[-50:]))
 
 
 @app.route("/api/traffic/top-flows")
 def traffic_top_flows():
     limit = int(request.args.get("limit", 10))
-    top_flows = sorted(net.flows, key=lambda flow: flow["bytes"], reverse=True)[:limit]
+    top_flows = sorted(ping_flows(), key=lambda flow: flow["bytes"], reverse=True)[:limit]
     return jsonify(top_flows)
 
 
 @app.route("/api/traffic/bandwidth-trends")
 def traffic_bandwidth_trends():
-    recent = net.flows[-12:]
+    recent = ping_flows()[-12:]
     return jsonify([
         {"timestamp": flow["timestamp"], "bandwidth_mbps": flow.get("bandwidth_mbps") or 0}
         for flow in recent
     ])
+
+
+@app.route("/api/pings")
+def pings():
+    limit = int(request.args.get("limit", 50))
+    src = request.args.get("src")
+    dst = request.args.get("dst")
+    status = request.args.get("status")
+    attack_only = request.args.get("attack_only")
+    pings_list = list(reversed(ping_flows()))
+    if src:
+        pings_list = [ping for ping in pings_list if ping.get("src_host") == src or ping.get("src") == src]
+    if dst:
+        pings_list = [ping for ping in pings_list if ping.get("dst_host") == dst or ping.get("dst") == dst]
+    if status:
+        pings_list = [ping for ping in pings_list if (ping.get("status") or "").lower() == status.lower()]
+    if attack_only and attack_only.lower() in ("1", "true", "yes"):
+        pings_list = [ping for ping in pings_list if ping.get("attack_detected")]
+    return jsonify(pings_list[:limit])
+
+
+@app.route("/api/pings/ingest", methods=["POST"])
+def ingest_ping():
+    payload = request.get_json() or {}
+    ping_event = ingest_ping_event(payload)
+    return jsonify(ping_event), 201
+
+
+@app.route("/api/pings/latest")
+def latest_ping():
+    return jsonify(ping_stats()["latest_ping"])
+
+
+@app.route("/api/pings/stats")
+def ping_statistics():
+    return jsonify(ping_stats())
 
 
 @app.route("/api/traffic/port-stats")
@@ -533,8 +698,8 @@ def traffic_port_stats():
     for switch_id, switch_data in net.switches.items():
         stats.append({
             "switch": switch_id,
-            "name": switch_data["name"],
-            "ports": switch_data["ports"],
+            "name": switch_data.get("name", switch_id),
+            "ports": switch_data.get("ports", 0),
             "utilization": random.randint(15, 80),
         })
     return jsonify(stats)

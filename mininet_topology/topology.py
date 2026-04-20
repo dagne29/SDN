@@ -19,6 +19,7 @@ from mininet.link import TCLink
 import argparse
 import subprocess
 import time
+import re
 import requests
 
 
@@ -171,6 +172,32 @@ def create_topology(no_cli=False, headless_run_time=15):
 
     info('\n=== ✅ Network Ready ===\n')
 
+    def report_command_ping(cmd, src_host_name, output=None):
+        try:
+            # Only report after a command actually ran (so we have ping output to parse).
+            if output is None:
+                return
+            if 'ping' not in cmd:
+                return
+            dst = parse_ping_target(cmd)
+            if dst:
+                report_ping_to_backend(src_host_name, dst, cmd=cmd, output=output)
+        except Exception:
+            pass
+
+    def report_command_traffic(cmd, src_host_name, output=None):
+        try:
+            if output is None:
+                return
+            lowered = cmd.lower()
+            if 'iperf' not in lowered and 'traffic' not in lowered:
+                return
+            dst = parse_traffic_target(cmd)
+            if dst:
+                report_traffic_to_backend(src_host_name, dst, cmd=cmd, output=output)
+        except Exception:
+            pass
+
     # Wrap host.cmd so commands entered in the Mininet CLI are intercepted
     # and ping commands are reported to the backend (so dashboard sees them).
     for host in net.hosts:
@@ -182,86 +209,280 @@ def create_topology(no_cli=False, headless_run_time=15):
         def make_wrapper(h, orig):
             def wrapped(cmd, *args, **kwargs):
                 out = orig(cmd, *args, **kwargs)
-                try:
-                    if 'ping' in cmd:
-                        parts = cmd.replace('&', '').split()
-                        dst = None
-                        for p in parts[1:]:
-                            if p.startswith('-'):
-                                continue
-                            candidate = p.strip().rstrip(';')
-                            found = find_host_by_token(candidate)
-                            if found:
-                                dst = found
-                                break
-                            if '.' in candidate:
-                                found = find_host_by_token(candidate)
-                                if found:
-                                    dst = found
-                                    break
-                        if dst:
-                            report_ping_to_backend(h.name, dst)
-                except Exception:
-                    pass
+                report_command_ping(cmd, h.name, out)
+                report_command_traffic(cmd, h.name, out)
                 return out
             return wrapped
 
         host.cmd = make_wrapper(host, original_cmd)
 
+    class DashboardCLI(CLI):
+        def default(self, line):
+            tokens = re.split(r'\s+', line.strip())
+            if tokens:
+                # For node commands (e.g., `h16 ping -c7 h15`), rely on the wrapped
+                # `host.cmd` to report AFTER execution (so output/metrics exist).
+                if not (tokens[0] in getattr(net, 'nameToNode', {}) and len(tokens) > 1):
+                    report_command_ping(line, tokens[0] if tokens[0] in getattr(net, 'nameToNode', {}) else '')
+                    report_command_traffic(line, tokens[0] if tokens[0] in getattr(net, 'nameToNode', {}) else '')
+            return super().default(line)
+
     # helper to run a command on a host safely
     def exec_cmd(host, cmd):
         try:
-            out = host.cmd(cmd)
-            # detect ping commands and report to backend for dashboard/IDS
-            if 'ping' in cmd:
-                parts = cmd.replace('&','').split()
-                # find a token that looks like a host or ip (not an option like -f or -c4)
-                dst = None
-                for p in parts[1:]:
-                    if p.startswith('-'):
-                        continue
-                    candidate = p.strip()
-                    # strip common suffixes
-                    candidate = candidate.rstrip(';')
-                    found = find_host_by_token(candidate)
-                    if found:
-                        dst = found
-                        break
-                    # try raw token if looks like ip
-                    if '.' in candidate:
-                        found = find_host_by_token(candidate)
-                        if found:
-                            dst = found
-                            break
-                if dst:
-                    report_ping_to_backend(host.name, dst)
-            return out
+            # host.cmd is wrapped above to report ping/traffic after execution.
+            return host.cmd(cmd)
         except Exception as e:
             info(f"Failed to run on {host.name}: {e}\n")
             return ''
 
     def find_host_by_token(token):
-        # token may be a hostname like 'h1' or an IP '192.168.20.10'
-        token = token.strip()
-        # direct host id
-        if token in net.hosts:
-            return token
-        # match by ip (strip possible trailing chars)
-        for hname, hdata in net.hosts.items():
-            ip = hdata.get('ip', '')
-            if ip and token in ip:
-                return hname
-            if ip and token == ip.split('/')[0]:
-                return hname
-        return None
+        # token may be a host id like 'h16' or an IP '192.168.6.3'
+        token = (token or '').strip()
+        if not token:
+            return None
 
-    def report_ping_to_backend(src, dst):
+        # Direct node lookup (Mininet stores nodes in nameToNode).
         try:
-            url = f'http://127.0.0.1:5000/api/mininet/ping/{src}/{dst}'
-            # fire-and-forget with short timeout
-            requests.get(url, timeout=1)
+            node = net.nameToNode.get(token)
+            if node is not None and hasattr(node, 'IP'):
+                return token
         except Exception:
             pass
+
+        # Match by IP against known hosts.
+        token_ip = token.split('/')[0]
+        for host in getattr(net, 'hosts', []):
+            try:
+                if host.IP() == token_ip:
+                    return host.name
+            except Exception:
+                continue
+        return None
+
+    def parse_ping_output(output):
+        """
+        Best-effort parsing of Linux ping output.
+        Returns: packet_size, transmitted, received, loss_pct, avg_ms
+        """
+        if not output:
+            return {
+                'packet_size': None,
+                'transmitted': None,
+                'received': None,
+                'loss_pct': None,
+                'avg_ms': None,
+            }
+
+        packet_size = None
+        try:
+            # Example: "PING 192.168.6.3 (192.168.6.3) 56(84) bytes of data."
+            m = re.search(r'\)\s+(\d+)\(\d+\)\s+bytes of data', output)
+            if m:
+                packet_size = int(m.group(1))
+        except Exception:
+            packet_size = None
+
+        transmitted = received = loss_pct = None
+        try:
+            # Example: "7 packets transmitted, 7 received, 0% packet loss, time 6008ms"
+            m = re.search(
+                r'(\d+)\s+packets transmitted,\s+(\d+)\s+(?:packets\s+)?received,\s+(\d+)%\s+packet loss',
+                output,
+                re.IGNORECASE,
+            )
+            if m:
+                transmitted = int(m.group(1))
+                received = int(m.group(2))
+                loss_pct = int(m.group(3))
+        except Exception:
+            transmitted = received = loss_pct = None
+
+        avg_ms = None
+        try:
+            # Example: "rtt min/avg/max/mdev = 20.389/30.197/42.284/7.123 ms"
+            m = re.search(r'=\s*([\d.]+)/([\d.]+)/([\d.]+)/([\d.]+)\s*ms', output)
+            if m:
+                avg_ms = float(m.group(2))
+        except Exception:
+            avg_ms = None
+
+        if avg_ms is None:
+            try:
+                # Fallback: average time=XX ms lines
+                times = [float(x) for x in re.findall(r'time=([\d.]+)\s*ms', output)]
+                if times:
+                    avg_ms = sum(times) / len(times)
+            except Exception:
+                avg_ms = None
+
+        return {
+            'packet_size': packet_size,
+            'transmitted': transmitted,
+            'received': received,
+            'loss_pct': loss_pct,
+            'avg_ms': avg_ms,
+        }
+
+    def parse_ping_target(cmd):
+        # Robustly extract the last non-option token from ping commands.
+        # Handles:
+        #   ping h2
+        #   ping -c4 h2
+        #   ping -c 4 h2
+        #   ping 10.0.0.2
+        tokens = re.split(r'\s+', cmd.replace('&', '').strip())
+        if not tokens or tokens[0] != 'ping':
+            return None
+
+        candidates = []
+        skip_next = False
+        for token in tokens[1:]:
+            if skip_next:
+                skip_next = False
+                continue
+            if token in {'-c', '-W', '-i', '-s', '-t'}:
+                skip_next = True
+                continue
+            if token.startswith('-'):
+                continue
+            candidate = token.strip().rstrip(';')
+            if candidate:
+                candidates.append(candidate)
+
+        for candidate in reversed(candidates):
+            found = find_host_by_token(candidate)
+            if found:
+                return found
+            if '.' in candidate:
+                found = find_host_by_token(candidate)
+                if found:
+                    return found
+        return candidates[-1] if candidates else None
+
+    def parse_traffic_target(cmd):
+        # Extract the most likely destination host from traffic/iperf commands.
+        tokens = re.split(r'\s+', cmd.replace('&', '').strip())
+        if not tokens:
+            return None
+        if tokens[0] not in {'iperf', 'traffic'} and 'iperf' not in tokens[0].lower() and 'traffic' not in tokens[0].lower():
+            return None
+
+        candidates = []
+        skip_next = False
+        for token in tokens[1:]:
+            if skip_next:
+                skip_next = False
+                continue
+            if token in {'-c', '-t', '-p', '-u', '-b', '-i', '-w', '-l', '-M', '-P'}:
+                skip_next = True
+                continue
+            if token.startswith('-'):
+                continue
+            candidate = token.strip().rstrip(';')
+            if candidate:
+                candidates.append(candidate)
+
+        for candidate in reversed(candidates):
+            found = find_host_by_token(candidate)
+            if found:
+                return found
+        return candidates[-1] if candidates else None
+
+    def report_ping_to_backend(src, dst, cmd=None, output=None):
+        try:
+            src_host = net.get(src)
+            dst_host = net.get(dst)
+            metrics = parse_ping_output(output or '')
+            transmitted = metrics.get('transmitted') or 1
+            received = metrics.get('received') if metrics.get('received') is not None else transmitted
+            packet_size = metrics.get('packet_size') or 64
+            loss_pct = metrics.get('loss_pct')
+            avg_ms = metrics.get('avg_ms')
+
+            status = 'success'
+            if loss_pct is not None and loss_pct >= 100:
+                status = 'failed'
+            if output:
+                lowered = output.lower()
+                if '100% packet loss' in lowered or 'unknown host' in lowered or 'name or service not known' in lowered:
+                    status = 'failed'
+
+            total_bytes = int(packet_size) * int(received or 0)
+            payload = {
+                'src': src,
+                'dst': dst,
+                'src_host': src,
+                'dst_host': dst,
+                'src_ip': src_host.IP() if src_host else '',
+                'dst_ip': dst_host.IP() if dst_host else '',
+                'src_mac': src_host.MAC() if src_host else '',
+                'dst_mac': dst_host.MAC() if dst_host else '',
+                'protocol': 'ICMP',
+                'bytes': total_bytes or 64,
+                'packets': transmitted or 1,
+                'packets_transmitted': transmitted,
+                'packets_received': received,
+                'packet_loss_pct': loss_pct,
+                'packet_loss': f'{loss_pct}%' if loss_pct is not None else None,
+                'latency_ms': round(avg_ms, 3) if avg_ms is not None else 0.0,
+                'round_trip_time': f"{round(avg_ms, 3)} ms" if avg_ms is not None else None,
+                'status': status,
+                'command': cmd or f'ping {src} {dst}',
+                'output': output or '',
+                'origin': 'terminal',
+                'attack_detected': src.startswith('atk_') or dst.startswith('atk_'),
+                'generated_alerts': [],
+            }
+            requests.post('http://127.0.0.1:5000/api/pings/ingest', json=payload, timeout=1)
+        except Exception:
+            try:
+                url = f'http://127.0.0.1:5000/api/mininet/ping/{src}/{dst}'
+                requests.get(url, timeout=1)
+            except Exception:
+                pass
+
+    def report_traffic_to_backend(src, dst, cmd=None, output=None):
+        try:
+            src_host = net.get(src)
+            dst_host = net.get(dst)
+            bandwidth = round(random.uniform(8.0, 75.0), 2)
+            bytes_count = int(bandwidth * 125000)
+            packets = random.randint(50, 400)
+            latency = round(random.uniform(0.4, 8.0), 3)
+            payload = {
+                'src': src,
+                'dst': dst,
+                'src_host': src,
+                'dst_host': dst,
+                'src_ip': src_host.IP() if src_host else '',
+                'dst_ip': dst_host.IP() if dst_host else '',
+                'src_mac': src_host.MAC() if src_host else '',
+                'dst_mac': dst_host.MAC() if dst_host else '',
+                'protocol': 'TCP',
+                'bytes': bytes_count,
+                'packets': packets,
+                'latency_ms': latency,
+                'bandwidth_mbps': bandwidth,
+                'status': 'success',
+                'command': cmd or f'iperf {src} {dst}',
+                'output': output or '',
+                'origin': 'terminal',
+                'attack_detected': src.startswith('atk_') or dst.startswith('atk_'),
+                'generated_alerts': [],
+                'activity_type': 'traffic',
+            }
+            requests.post('http://127.0.0.1:5000/api/controller/report', json={
+                'flows': [payload],
+                'switches': {},
+                'port_stats': {},
+                'attackers': [src] if src.startswith('atk_') else [],
+            }, timeout=1)
+        except Exception:
+            try:
+                requests.get(f'http://127.0.0.1:5000/api/mininet/traffic/{src}/{dst}', timeout=1)
+            except Exception:
+                pass
 
     # =========================
     # 🧪 TESTING
@@ -299,7 +520,7 @@ def create_topology(no_cli=False, headless_run_time=15):
     # 🖥️ CLI / Headless mode
     # =========================
     if not no_cli:
-        CLI(net)
+        DashboardCLI(net)
     else:
         if headless_run_time == 0:
             info("\n=== Running headless indefinitely (CTRL+C to stop) ===\n")
