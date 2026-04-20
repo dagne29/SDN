@@ -26,15 +26,23 @@ class NetworkState:
             "h1": {"name": "Client 1", "ip": "10.0.0.1", "mac": "00:00:00:00:00:01", "role": "user"},
             "h2": {"name": "Client 2", "ip": "10.0.0.2", "mac": "00:00:00:00:00:02", "role": "user"},
             "h3": {"name": "Server", "ip": "10.0.0.3", "mac": "00:00:00:00:00:03", "role": "server"},
-            "atk_syn": {"name": "SYN Attacker", "ip": "10.0.0.101", "mac": "00:00:00:00:10:01", "role": "attacker"},
-            "atk_icmp": {"name": "ICMP Attacker", "ip": "10.0.0.102", "mac": "00:00:00:00:10:02", "role": "attacker"},
+            "atk_syn": {"name": "SYN Attacker", "ip": "10.0.0.10", "mac": "00:00:00:00:10:01", "role": "attacker"},
+            "atk_icmp": {"name": "ICMP Attacker", "ip": "10.0.0.11", "mac": "00:00:00:00:10:02", "role": "attacker"},
+            "atk_scan": {"name": "Port Scanner", "ip": "10.0.0.12", "mac": "00:00:00:00:10:03", "role": "attacker"},
+            "atk_arp": {"name": "ARP Spoofer", "ip": "10.0.0.13", "mac": "00:00:00:00:10:04", "role": "attacker"},
+            "atk_dns": {"name": "DNS Attacker", "ip": "10.0.0.14", "mac": "00:00:00:00:10:05", "role": "attacker"},
+            "atk_brute": {"name": "Brute Forcer", "ip": "10.0.0.15", "mac": "00:00:00:00:10:06", "role": "attacker"},
         }
         self.links = [
             {"src": "h1", "dst": "s1"},
             {"src": "h2", "dst": "s1"},
             {"src": "h3", "dst": "s2"},
-            {"src": "atk_syn", "dst": "s2"},
-            {"src": "atk_icmp", "dst": "s2"},
+            {"src": "atk_syn", "dst": "s11"},
+            {"src": "atk_icmp", "dst": "s11"},
+            {"src": "atk_scan", "dst": "s11"},
+            {"src": "atk_arp", "dst": "s11"},
+            {"src": "atk_dns", "dst": "s11"},
+            {"src": "atk_brute", "dst": "s11"},
             {"src": "s1", "dst": "s2"},
         ]
         self.flows = []
@@ -56,6 +64,14 @@ class NetworkState:
 
     def source_for(self, host_name):
         host = self.hosts.get(host_name, {})
+        if not host:
+            return {
+                "host": host_name,
+                "name": host_name,
+                "ip": "",
+                "mac": "00:00:00:00:00:00",
+                "role": "user",
+            }
         return {
             "host": host_name,
             "name": host.get("name", host_name),
@@ -102,7 +118,17 @@ def flow_status(source, destination):
     return "active"
 
 
-def register_request(source_host, destination_host, protocol, bytes_count, packets, latency_ms, bandwidth_mbps=None):
+def register_request(
+    source_host,
+    destination_host,
+    protocol,
+    bytes_count,
+    packets,
+    latency_ms,
+    bandwidth_mbps=None,
+    command=None,
+    activity_type=None,
+):
     with net.lock:
         source = net.source_for(source_host)
         destination = net.source_for(destination_host)
@@ -124,6 +150,8 @@ def register_request(source_host, destination_host, protocol, bytes_count, packe
             "bandwidth_mbps": bandwidth_mbps,
             "status": flow_status(source, destination),
             "timestamp": timestamp,
+            "command": command or (f"ping {source_host} {destination_host}" if protocol == "ICMP" else f"iperf {source_host} {destination_host}"),
+            "activity_type": activity_type or ("ping" if protocol == "ICMP" else "traffic"),
         }
         net.flows.append(flow)
         net.flows = net.flows[-150:]
@@ -197,6 +225,10 @@ def traffic_stats():
     }
 
 
+def ping_flows():
+    return [flow for flow in net.flows if flow.get("activity_type") == "ping"]
+
+
 def topology_payload():
     return {
         "switches": net.switches,
@@ -214,7 +246,7 @@ def background_traffic():
         packets = random.randint(5, 120)
         latency = random.uniform(0.2, 5.0)
         bandwidth = round(random.uniform(1.5, 18.0), 2)
-        register_request(src, dst, protocol, bytes_count, packets, latency, bandwidth)
+        register_request(src, dst, protocol, bytes_count, packets, latency, bandwidth, activity_type="background")
         time.sleep(5)
 
 
@@ -224,6 +256,7 @@ threading.Thread(target=background_traffic, daemon=True).start()
 @app.route("/api/dashboard")
 def dashboard():
     stats = traffic_stats()
+    recent_pings = ping_flows()[-10:]
     return jsonify({
         "network_status": {
             "controller": "running",
@@ -247,6 +280,8 @@ def dashboard():
             "high_load": stats["suspicious_flows"] > 0,
         },
         "recent_traffic": net.flows[-10:],
+        "recent_ping_traffic": recent_pings,
+        "last_ping_flow": recent_pings[-1] if recent_pings else None,
         "active_alerts": net.alerts[-5:],
         "system_health": "good" if len(net.alerts) < 3 else "attention",
         "timestamp": now_iso(),
@@ -282,11 +317,8 @@ def mininet_connectivity():
 
 @app.route("/api/mininet/ping/<src>/<dst>")
 def mininet_ping(src, dst):
-    if src not in net.hosts or dst not in net.hosts:
-        return jsonify({"error": "Unknown Mininet host"}), 404
-
     latency = random.uniform(0.2, 4.5)
-    flow, alerts = register_request(src, dst, "ICMP", 64, 1, latency, 0.08)
+    flow, alerts = register_request(src, dst, "ICMP", 64, 1, latency, 0.08, command=f"ping -c4 {src} {dst}", activity_type="ping")
     return jsonify({
         "command": f"ping {src} {dst}",
         "status": "success",
@@ -310,14 +342,11 @@ def mininet_ping(src, dst):
 
 @app.route("/api/mininet/traffic/<src>/<dst>")
 def mininet_traffic(src, dst):
-    if src not in net.hosts or dst not in net.hosts:
-        return jsonify({"error": "Unknown Mininet host"}), 404
-
     bandwidth = round(random.uniform(8.0, 75.0), 2)
     bytes_count = int(bandwidth * 125000)
     packets = random.randint(50, 400)
     latency = random.uniform(0.4, 8.0)
-    flow, alerts = register_request(src, dst, "TCP", bytes_count, packets, latency, bandwidth)
+    flow, alerts = register_request(src, dst, "TCP", bytes_count, packets, latency, bandwidth, command=f"iperf {src} {dst}", activity_type="traffic")
     return jsonify({
         "command": f"iperf {src} {dst}",
         "status": "success",
@@ -401,6 +430,57 @@ def topology_hosts():
 @app.route("/api/topology/links")
 def topology_links():
     return jsonify(net.links)
+
+
+@app.route('/api/controller/report', methods=['POST'])
+def controller_report():
+    data = request.get_json() or {}
+    flows = data.get('flows', [])
+    switches = data.get('switches', {})
+    port_stats = data.get('port_stats', {})
+    attackers = data.get('attackers', [])
+
+    with net.lock:
+        # Merge flows
+        for flow in flows:
+            net.flow_counter += 1
+            flow_entry = {
+                'id': flow.get('id', f'FLOW-{net.flow_counter:04d}'),
+                'src_host': flow.get('src_host'),
+                'src_ip': flow.get('src_ip'),
+                'dst_host': flow.get('dst_host'),
+                'dst_ip': flow.get('dst_ip'),
+                'protocol': flow.get('protocol', 'ICMP'),
+                'bytes': flow.get('bytes', 64),
+                'packets': flow.get('packets', 1),
+                'latency_ms': flow.get('latency_ms', 0.0),
+                'bandwidth_mbps': flow.get('bandwidth_mbps'),
+                'status': flow.get('status', flow_status({'role': 'unknown'}, {'role': 'unknown'})),
+                'timestamp': now_iso(),
+                'command': flow.get('command'),
+                'activity_type': flow.get('activity_type', 'controller'),
+            }
+            net.flows.append(flow_entry)
+        net.flows = net.flows[-200:]
+
+        # Update switches metadata
+        for sid, sdata in switches.items():
+            if sid not in net.switches:
+                net.switches[sid] = sdata
+            else:
+                net.switches[sid].update(sdata)
+
+        # Save port stats if provided
+        for sid, pst in port_stats.items():
+            net.switches.setdefault(sid, {}).setdefault('port_stats', {})
+            net.switches[sid]['port_stats'].update(pst)
+
+        # Record attackers
+        for atk in attackers:
+            if atk not in net.blocked_ips:
+                net.blocked_ips.append(atk)
+
+    return jsonify({'status': 'ok', 'received': {'flows': len(flows), 'switches': len(switches)}})
 
 
 @app.route("/api/topology/nodes")

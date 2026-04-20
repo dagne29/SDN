@@ -1,6 +1,18 @@
 import axios from 'axios';
 
-const API_BASE_URL = 'http://localhost:5000/api';
+const browserHost =
+  typeof window !== 'undefined' && window.location?.hostname
+    ? window.location.hostname
+    : 'localhost';
+
+const browserProtocol =
+  typeof window !== 'undefined' && window.location?.protocol === 'https:'
+    ? 'https:'
+    : 'http:';
+
+const API_BASE_URL =
+  process.env.REACT_APP_API_BASE_URL ||
+  `${browserProtocol}//${browserHost}:5000/api`;
 
 // Create axios instance with base URL
 const apiClient = axios.create({

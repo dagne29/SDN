@@ -487,12 +487,12 @@ export default function Dashboard() {
             <div className="col-12 col-xl-6">
               <div className="card h-100">
                 <div className="card-header">
-                  <h5>Recent Traffic</h5>
+                  <h5>Recent Ping Activity</h5>
                 </div>
                 <div className="card-body">
-                  {dashboardData?.recent_traffic?.length ? (
+                  {dashboardData?.recent_ping_traffic?.length ? (
                     <div className="list-group list-group-flush">
-                      {dashboardData.recent_traffic.slice().reverse().slice(0, 5).map((flow) => (
+                      {dashboardData.recent_ping_traffic.slice().reverse().slice(0, 5).map((flow) => (
                         <div
                           key={flow.id}
                           className="list-group-item list-group-item-action"
@@ -500,14 +500,26 @@ export default function Dashboard() {
                           role="button"
                           style={{ cursor: 'pointer' }}
                         >
-                          <small className="text-muted">
-                            {flow.src_host} to {flow.dst_host} | {flow.protocol} | {flow.bytes} bytes
-                          </small>
+                          <div className="d-flex justify-content-between gap-3">
+                            <small className="text-muted">
+                              <strong>{flow.src_host}</strong> → <strong>{flow.dst_host}</strong>
+                              {' '}| {flow.protocol}
+                              {' '}| {flow.packets} packets
+                              {' '}| {flow.bytes} bytes
+                            </small>
+                            <small className="text-muted">{flow.timestamp}</small>
+                          </div>
+                          <div className="d-flex justify-content-between gap-3 mt-1">
+                            <small className="text-muted">Flow ID: <code>{flow.id}</code></small>
+                            <span className={`badge ${flow.status === 'active' ? 'bg-success' : 'bg-danger'}`}>
+                              {flow.status || 'active'}
+                            </span>
+                          </div>
                         </div>
                       ))}
                     </div>
                   ) : (
-                    <p className="text-muted mb-0">No recent traffic.</p>
+                    <p className="text-muted mb-0">No recent ping activity.</p>
                   )}
                 </div>
               </div>

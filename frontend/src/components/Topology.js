@@ -4,10 +4,19 @@ import { topologyAPI, mininetAPI } from '../services/api';
 export default function Topology() {
   const [devices, setDevices] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [pinPositions, setPinPositions] = useState(false);
+  const [savedPositions, setSavedPositions] = useState(null);
+  const [useBackground, setUseBackground] = useState(true);
   const networkRef = useRef(null);
   const visNetworkRef = useRef(null);
+  const hostDisplayMapRef = useRef({});
 
   useEffect(() => {
+    // load saved positions from localStorage
+    try {
+      const s = localStorage.getItem('topology_positions');
+      if (s) setSavedPositions(JSON.parse(s));
+    } catch (e) {}
     fetchTopology();
     const interval = setInterval(fetchTopology, 5000);
     return () => clearInterval(interval);
@@ -15,6 +24,17 @@ export default function Topology() {
 
   useEffect(() => {
     if (!devices) return;
+    // build host display map (h1, h2, ...) and keep stable unless hosts change
+    const hostKeys = devices.hosts ? Object.keys(devices.hosts).sort() : [];
+    const oldMap = hostDisplayMapRef.current || {};
+    const oldKeys = Object.keys(oldMap).sort();
+    if (hostKeys.length !== oldKeys.length || hostKeys.some((k, i) => k !== oldKeys[i])) {
+      const map = {};
+      hostKeys.forEach((hid, idx) => {
+        map[hid] = `h${idx + 1}`;
+      });
+      hostDisplayMapRef.current = map;
+    }
     // build nodes and edges for vis-network
     const nodes = [];
     const edges = [];
@@ -22,14 +42,56 @@ export default function Topology() {
     // add switches
     if (devices.switches) {
       Object.entries(devices.switches).forEach(([id, sw], idx) => {
-        nodes.push({ id: id, label: `${id}\n${sw.name}`, shape: 'box', color: { background: '#ffd966', border: '#d4a017' } });
+        const base = { id: id, label: `${id}\n${sw.name}`, shape: 'box', color: { background: '#ffd966', border: '#d4a017' } };
+        // apply saved position if available
+        if (savedPositions && savedPositions[id]) {
+          nodes.push({ ...base, x: savedPositions[id].x, y: savedPositions[id].y, fixed: pinPositions });
+        } else {
+          nodes.push(base);
+        }
+      });
+    }
+
+    // add controller node (always show controller)
+    const controllerBase = { id: 'controller', label: `Controller`, shape: 'diamond', color: { background: '#c7f9cc', border: '#10b981' } };
+    if (savedPositions && savedPositions['controller']) {
+      nodes.push({ ...controllerBase, x: savedPositions['controller'].x, y: savedPositions['controller'].y, fixed: pinPositions });
+    } else {
+      nodes.push(controllerBase);
+    }
+    // connect controller to all switches
+    if (devices.switches) {
+      Object.keys(devices.switches).forEach((swid) => {
+        edges.push({ id: `controller-${swid}`, from: 'controller', to: swid, color: { color: '#444' }, dashes: true });
+      });
+    }
+
+    // add explicit routers if provided
+    if (devices.routers) {
+      Object.entries(devices.routers).forEach(([id, router]) => {
+        const base = { id: id, label: `${router.name || id}\n${router.ip || ''}`, shape: 'triangle', color: { background: '#ffd1a8', border: '#d6862a' } };
+        if (savedPositions && savedPositions[id]) {
+          nodes.push({ ...base, x: savedPositions[id].x, y: savedPositions[id].y, fixed: pinPositions });
+        } else {
+          nodes.push(base);
+        }
+        if (router.connected_to) edges.push({ from: id, to: router.connected_to, color: { color: '#888' } });
       });
     }
 
     // add hosts
     if (devices.hosts) {
       Object.entries(devices.hosts).forEach(([id, host]) => {
-        nodes.push({ id: id, label: `${host.name}\n${host.ip}`, shape: 'ellipse', color: host.role === 'attacker' ? { background: '#ffcccc', border: '#ff4d4d' } : { background: '#cfe9ff', border: '#4da6ff' } });
+        const isRouterRole = host.role === 'router';
+        const shape = isRouterRole ? 'triangle' : 'ellipse';
+        const color = host.role === 'attacker' ? { background: '#ffcccc', border: '#ff4d4d' } : { background: '#cfe9ff', border: '#4da6ff' };
+        const displayId = (hostDisplayMapRef.current && hostDisplayMapRef.current[id]) || id;
+        const base = { id: id, label: `${displayId} — ${host.name}\n${host.ip}`, shape, color };
+        if (savedPositions && savedPositions[id]) {
+          nodes.push({ ...base, x: savedPositions[id].x, y: savedPositions[id].y, fixed: pinPositions });
+        } else {
+          nodes.push(base);
+        }
         // connect host to its switch if provided
         if (host.connected_to) {
           edges.push({ from: id, to: host.connected_to, color: { color: '#888' } });
@@ -47,12 +109,21 @@ export default function Topology() {
 
     const data = { nodes: new window.vis.DataSet(nodes), edges: new window.vis.DataSet(edges) };
     const options = {
+      // keep a stable layout so the topology structure remains visible
       physics: { stabilization: true, barnesHut: { gravitationalConstant: -6000 } },
       interaction: { hover: true, tooltipDelay: 100 },
       nodes: { font: { multi: true } },
     };
 
     if (networkRef.current) {
+      // set schematic background if enabled
+      try {
+        networkRef.current.style.backgroundImage = useBackground ? "url('/topology-schematic.svg')" : '';
+        networkRef.current.style.backgroundRepeat = 'no-repeat';
+        networkRef.current.style.backgroundPosition = 'center center';
+        networkRef.current.style.backgroundSize = 'contain';
+      } catch (e) {}
+
       visNetworkRef.current = new window.vis.Network(networkRef.current, data, options);
 
       // handle node clicks
@@ -95,6 +166,96 @@ export default function Topology() {
       })();
     }
   }, [devices]);
+
+  // apply a schematic layout: controller/top, routers above switches, switches in a row, hosts around their switch
+  const applySchematic = () => {
+    if (!visNetworkRef.current || !devices) return;
+    const positions = {};
+    // controller at top center
+    positions['controller'] = { x: 0, y: -320 };
+
+    // switches in a horizontal row
+    const swIds = devices.switches ? Object.keys(devices.switches) : [];
+    const swCount = swIds.length || 0;
+    const spacing = 220;
+    const startX = -((swCount - 1) * spacing) / 2;
+    const swPos = {};
+    swIds.forEach((sid, idx) => {
+      const x = startX + idx * spacing;
+      const y = 0;
+      positions[sid] = { x, y };
+      swPos[sid] = { x, y };
+    });
+
+    // routers (explicit) place above switches or top-left/right
+    const routerIds = devices.routers ? Object.keys(devices.routers) : [];
+    routerIds.forEach((rid, idx) => {
+      // place routers above the switches if possible
+      const target = swIds[idx % swIds.length] || null;
+      const x = target ? swPos[target].x : -300 + idx * 160;
+      const y = -160;
+      positions[rid] = { x, y };
+    });
+
+    // hosts: place them in a circle around their connected switch
+    const hosts = devices.hosts ? Object.entries(devices.hosts) : [];
+    const hostsBySwitch = {};
+    hosts.forEach(([hid, host]) => {
+      const sw = host.connected_to || 'ungrouped';
+      hostsBySwitch[sw] = hostsBySwitch[sw] || [];
+      hostsBySwitch[sw].push(hid);
+    });
+    Object.entries(hostsBySwitch).forEach(([sw, list]) => {
+      const center = swPos[sw] || { x: 0, y: 220 };
+      const radius = 140;
+      list.forEach((hid, i) => {
+        const angle = (i / list.length) * Math.PI * 2;
+        const x = Math.round(center.x + Math.cos(angle) * radius);
+        const y = Math.round(center.y + Math.sin(angle) * radius + 40);
+        positions[hid] = { x, y };
+      });
+    });
+
+    // apply positions to network
+    const updates = Object.entries(positions).map(([id, p]) => ({ id, x: p.x, y: p.y, fixed: pinPositions }));
+    visNetworkRef.current.body.data.nodes.update(updates);
+    // center view to controller
+    visNetworkRef.current.focus('controller', { scale: 1.0 });
+  };
+
+  // save current positions from the network into localStorage
+  const savePositions = () => {
+    if (!visNetworkRef.current) return;
+    const pos = visNetworkRef.current.getPositions();
+    try {
+      localStorage.setItem('topology_positions', JSON.stringify(pos));
+      setSavedPositions(pos);
+      setPinPositions(true);
+    } catch (e) {}
+  };
+
+  const clearSavedPositions = () => {
+    try {
+      localStorage.removeItem('topology_positions');
+      setSavedPositions(null);
+      setPinPositions(false);
+      // unfix nodes if network exists
+      if (visNetworkRef.current) {
+        const allIds = visNetworkRef.current.body.data.nodes.getIds();
+        const updates = allIds.map((id) => ({ id, fixed: false }));
+        visNetworkRef.current.body.data.nodes.update(updates);
+      }
+    } catch (e) {}
+  };
+
+  // UI helpers: toggle background
+  const toggleBackground = () => {
+    const newVal = !useBackground;
+    setUseBackground(newVal);
+    if (networkRef.current) {
+      networkRef.current.style.backgroundImage = newVal ? "url('/topology-schematic.svg')" : '';
+    }
+  };
 
   // parse raw connectivity output into a set of reachable pairs like 'h31->h32'
   const parseConnectivity = (text) => {
@@ -158,8 +319,14 @@ export default function Topology() {
       <div className="row g-4">
         <div className="col-12">
           <div className="card">
-            <div className="card-header bg-dark text-white">
+            <div className="card-header bg-dark text-white d-flex align-items-center justify-content-between">
               <h5 className="mb-0">Topology Map</h5>
+              <div className="btn-group">
+                <button className="btn btn-sm btn-outline-light" onClick={() => applySchematic()}>Apply Schematic</button>
+                <button className={`btn btn-sm ${useBackground ? 'btn-success' : 'btn-outline-light'}`} onClick={() => toggleBackground()}>{useBackground ? 'Background On' : 'Background Off'}</button>
+                <button className="btn btn-sm btn-outline-light" onClick={() => savePositions()}>Save Positions</button>
+                <button className="btn btn-sm btn-outline-light" onClick={() => clearSavedPositions()}>Clear Positions</button>
+              </div>
             </div>
             <div className="card-body">
               <div id="topology-network" ref={networkRef} style={{ height: '520px', width: '100%' }} />
@@ -192,16 +359,16 @@ export default function Topology() {
               <h5 className="mb-0">Hosts/Devices</h5>
             </div>
             <div className="card-body">
-              {devices?.hosts && Object.entries(devices.hosts).map(([id, host]) => (
-                <div key={id} className="mb-3 p-3 border rounded bg-light">
-                  <strong>{id}: {host.name}</strong>
-                  <div className="text-muted small">IP: {host.ip}</div>
-                  <div className="text-muted small">MAC: {host.mac}</div>
-                  <span className={`badge ${host.role === 'attacker' ? 'bg-danger' : 'bg-success'}`}>
-                    {host.role}
-                  </span>
-                </div>
-              ))}
+                    {devices?.hosts && Object.entries(devices.hosts).map(([id, host]) => (
+                      <div key={id} className="mb-3 p-3 border rounded bg-light">
+                        <strong>{(hostDisplayMapRef.current && hostDisplayMapRef.current[id]) || id}: {host.name}</strong>
+                        <div className="text-muted small">IP: {host.ip}</div>
+                        <div className="text-muted small">MAC: {host.mac}</div>
+                        <span className={`badge ${host.role === 'attacker' ? 'bg-danger' : 'bg-success'}`}>
+                          {host.role}
+                        </span>
+                      </div>
+                    ))}
             </div>
           </div>
         </div>
@@ -214,7 +381,7 @@ export default function Topology() {
         <div className="card-body">
           {devices?.links && devices.links.map((link, idx) => (
             <div key={idx} className="badge bg-secondary me-2 mb-2">
-              {link.src} ↔ {link.dst}
+              {(hostDisplayMapRef.current && hostDisplayMapRef.current[link.src]) || link.src} ↔ {(hostDisplayMapRef.current && hostDisplayMapRef.current[link.dst]) || link.dst}
             </div>
           ))}
         </div>

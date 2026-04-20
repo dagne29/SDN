@@ -11,6 +11,17 @@ body {
   min-height: 100vh;
 }
 
+/* layout with left sidebar */
+.app-shell {
+  display: flex;
+}
+
+.app-main {
+  margin-left: 220px; /* matches sidebar width */
+  flex: 1 1 auto;
+  padding: 24px 28px;
+}
+
 .app-hero {
   max-width: 1400px;
   margin: 26px auto 8px auto;
@@ -174,6 +185,11 @@ body {
 @media (max-width: 768px) {
   .main-content {
     margin-top: 10px;
+  }
+
+  .app-main {
+    margin-left: 0;
+    padding: 12px;
   }
 
   .container-fluid {

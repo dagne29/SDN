@@ -1,24 +1,45 @@
 import React, { useState, useEffect } from 'react';
-import { controllerAPI } from '../services/api';
+import { controllerAPI, trafficAPI, idsAPI } from '../services/api';
+import { useNavigate } from 'react-router-dom';
 
 export default function Controller() {
   const [status, setStatus] = useState(null);
+  const [flows, setFlows] = useState([]);
+  const [switches, setSwitches] = useState({});
+  const [portStats, setPortStats] = useState([]);
+  const [alerts, setAlerts] = useState([]);
   const [loading, setLoading] = useState(true);
+  const navigate = useNavigate();
 
   useEffect(() => {
-    fetchControllerStatus();
-    const interval = setInterval(fetchControllerStatus, 5000);
+    fetchAll();
+    const interval = setInterval(fetchAll, 4000);
     return () => clearInterval(interval);
   }, []);
 
-  const fetchControllerStatus = async () => {
+  const fetchAll = async () => {
     try {
-      const response = await controllerAPI.getStatus();
-      setStatus(response.data);
+      const [statRes, flowsRes, swRes, psRes, alertsRes] = await Promise.all([
+        controllerAPI.getStatus(),
+        controllerAPI.getFlows(),
+        controllerAPI.getSwitches(),
+        trafficAPI.getPortStats(),
+        idsAPI.getAlerts(20),
+      ]);
+
+      setStatus(statRes.data || {});
+      setFlows(flowsRes.data || []);
+      setSwitches(swRes.data || {});
+      setPortStats(psRes.data || []);
+      setAlerts(alertsRes.data || []);
       setLoading(false);
-    } catch (error) {
-      console.error('Error fetching controller status:', error);
+    } catch (err) {
+      console.error('Error fetching controller data', err);
     }
+  };
+
+  const handleFlowClick = (flow) => {
+    navigate(`/flows/${flow.id}`);
   };
 
   if (loading) {
@@ -34,93 +55,93 @@ export default function Controller() {
 
   return (
     <div className="container-fluid p-4">
-      <h2 className="mb-4">Controller Status</h2>
+      <h2 className="mb-4">Controller — Flows & Switches</h2>
 
       <div className="row g-4">
-        <div className="col-12 col-md-6 col-xl-4">
+        <div className="col-12 col-lg-6">
           <div className="card h-100">
+            <div className="card-header"><strong>Controller Flows</strong></div>
             <div className="card-body">
-              <h5 className="card-title">Connection</h5>
-              <p className="card-text">
-                {status.controller_connected ? (
-                  <span className="badge bg-success">Connected</span>
-                ) : (
-                  <span className="badge bg-danger">Disconnected</span>
-                )}
-              </p>
-              <p className="text-muted">Controller connection state to the Mininet topology.</p>
+              <p className="text-muted">Controller flow table is available separately.</p>
+              <button className="btn btn-sm btn-primary" onClick={() => navigate('/controller/flows')}>Open Controller Flows</button>
             </div>
           </div>
         </div>
 
-        <div className="col-12 col-md-6 col-xl-4">
+        <div className="col-12 col-lg-6">
           <div className="card h-100">
+            <div className="card-header"><strong>Switches & Port Stats</strong></div>
             <div className="card-body">
-              <h5 className="card-title">Topology</h5>
-              <p className="card-text">
-                {status.topology_running ? (
-                  <span className="badge bg-success">Running</span>
-                ) : (
-                  <span className="badge bg-danger">Stopped</span>
-                )}
-              </p>
-              <p className="text-muted">Current Mininet topology state monitored by the controller.</p>
-            </div>
-          </div>
-        </div>
+              <div className="mb-3">
+                <strong>Switch List</strong>
+                <div className="mt-2">
+                  {Object.keys(switches).length ? (
+                    Object.entries(switches).map(([sid, sdata]) => (
+                      <div key={sid} className="mb-2">
+                        <div><strong>{sid}</strong> — {sdata.name || 'Switch'}</div>
+                        <small className="text-muted">Ports: {sdata.ports || (sdata.port_stats ? Object.keys(sdata.port_stats).length : '—')}</small>
+                      </div>
+                    ))
+                  ) : (
+                    <p className="text-muted">No switches registered.</p>
+                  )}
+                </div>
+              </div>
 
-        <div className="col-12 col-md-12 col-xl-4">
-          <div className="card h-100">
-            <div className="card-body">
-              <h5 className="card-title">Platform</h5>
-              <p className="card-text">{status.hosts?.length || 0} hosts · {status.switches?.length || 0} switches</p>
-              <p className="text-muted">Devices currently managed by the controller.</p>
+              <div>
+                <strong>Port Stats</strong>
+                {portStats.length ? (
+                  <div className="mt-2">
+                    {portStats.map((ps) => (
+                      <div key={ps.switch} className="mb-2">
+                        <div><strong>{ps.switch}</strong>: utilization {ps.utilization}%</div>
+                        <small className="text-muted">Ports: {ps.ports}</small>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-muted">No port stats available.</p>
+                )}
+              </div>
             </div>
           </div>
         </div>
       </div>
 
-      <div className="card mt-4">
-        <div className="card-header bg-primary text-white">
-          <h5 className="mb-0">Controller Details</h5>
+      <div className="row mt-4">
+        <div className="col-12 col-lg-6">
+          <div className="card">
+            <div className="card-header"><strong>IDS Alerts (recent)</strong></div>
+            <div className="card-body">
+              {alerts.length ? (
+                <ul className="list-group list-group-flush">
+                  {alerts.map(a => (
+                    <li key={a.id} className="list-group-item">
+                      <strong>{a.type}</strong> — {a.source_host} → {a.destination_host}
+                      <div><small className="text-muted">{a.timestamp} • {a.severity}</small></div>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-muted">No recent alerts.</p>
+              )}
+            </div>
+          </div>
         </div>
-        <div className="card-body">
-          <div className="row gy-3">
-            <div className="col-12 col-lg-6">
-              <div className="border rounded p-3 bg-light">
-                <strong>Hosts</strong>
-                <div className="mt-2">
-                  {status.hosts?.map((host) => (
-                    <span key={host} className="badge bg-secondary me-2 mb-2">
-                      {host}
-                    </span>
+
+        <div className="col-12 col-lg-6">
+          <div className="card">
+            <div className="card-header"><strong>Attacker / Blocked IPs</strong></div>
+            <div className="card-body">
+              {status.blocked_ips?.length ? (
+                <div>
+                  {status.blocked_ips.map(ip => (
+                    <div key={ip} className="badge bg-danger me-2 mb-2">{ip}</div>
                   ))}
                 </div>
-              </div>
-            </div>
-            <div className="col-12 col-lg-6">
-              <div className="border rounded p-3 bg-light">
-                <strong>Switches</strong>
-                <div className="mt-2">
-                  {status.switches?.map((sw) => (
-                    <span key={sw} className="badge bg-secondary me-2 mb-2">
-                      {sw}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            </div>
-            <div className="col-12">
-              <div className="border rounded p-3 bg-light">
-                <strong>Links</strong>
-                <div className="mt-2">
-                  {status.links?.map((link, idx) => (
-                    <div key={idx} className="badge bg-info text-dark me-2 mb-2">
-                      {link.src} ↔ {link.dst}
-                    </div>
-                  ))}
-                </div>
-              </div>
+              ) : (
+                <p className="text-muted">No blocked IPs</p>
+              )}
             </div>
           </div>
         </div>

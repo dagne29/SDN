@@ -7,20 +7,24 @@ import Topology from './components/Topology';
 import TrafficAnalysis from './components/TrafficAnalysis';
 import IDSAlerts from './components/IDSAlerts';
 import Controller from './components/Controller';
+import ControllerFlows from './components/ControllerFlows';
 import Navigation from './components/Navigation';
 
 function App() {
   return (
     <Router>
-      <div className="App">
+      <div className="App app-shell">
         <Navigation />
-        <Routes>
-          <Route path="/" element={<Dashboard />} />
-          <Route path="/topology" element={<Topology />} />
-          <Route path="/controller" element={<Controller />} />
-          <Route path="/traffic" element={<TrafficAnalysis />} />
-          <Route path="/alerts" element={<IDSAlerts />} />
-        </Routes>
+        <main className="app-main">
+          <Routes>
+            <Route path="/" element={<Dashboard />} />
+            <Route path="/topology" element={<Topology />} />
+            <Route path="/controller" element={<Controller />} />
+            <Route path="/controller/flows" element={<ControllerFlows />} />
+            <Route path="/traffic" element={<TrafficAnalysis />} />
+            <Route path="/alerts" element={<IDSAlerts />} />
+          </Routes>
+        </main>
       </div>
     </Router>
   );
