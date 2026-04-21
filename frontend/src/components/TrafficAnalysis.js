@@ -74,6 +74,7 @@ export default function TrafficAnalysis() {
   const [alerts, setAlerts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [pingSelection, setPingSelection] = useState({ src: 'h1', dst: 'h2' });
+  const [pingRunning, setPingRunning] = useState(false);
   const [filterHost, setFilterHost] = useState('all');
   const [filterProtocol, setFilterProtocol] = useState('all');
   const [filterWindow, setFilterWindow] = useState('24h');
@@ -89,50 +90,51 @@ export default function TrafficAnalysis() {
     return 'overview';
   }, [location.pathname]);
 
-  useEffect(() => {
-    const loadTrafficData = async () => {
-      try {
-        const [pingsRes, pingStatsRes, statusRes] = await Promise.all([
-          pingAPI.getAll({ limit: 100 }),
-          pingAPI.getStats(),
-          mininetAPI.getStatus(),
-        ]);
+  // Fetch traffic/ping data (used on load and after running a ping)
+  const fetchTrafficData = async () => {
+    try {
+      const [pingsRes, pingStatsRes, statusRes] = await Promise.all([
+        pingAPI.getAll({ limit: 100 }),
+        pingAPI.getStats(),
+        mininetAPI.getStatus(),
+      ]);
 
-        const pingData = pingsRes.data || [];
-        setFlows(pingData);
-        setHosts(statusRes.data?.hosts || []);
-        setAlerts(pingData.filter((ping) => ping.attack_detected || ((ping.generated_alerts || []).length > 0)));
+      const pingData = pingsRes.data || [];
+      setFlows(pingData);
+      setHosts(statusRes.data?.hosts || []);
+      setAlerts(pingData.filter((ping) => ping.attack_detected || ((ping.generated_alerts || []).length > 0)));
 
-        const totalBytes = pingData.reduce((acc, ping) => acc + Number(ping.bytes || 0), 0);
-        const totalPackets = pingData.reduce((acc, ping) => acc + Number(ping.packets || 0), 0);
-        const suspiciousFlows = pingData.filter((ping) => ping.attack_detected || (ping.status || '').toLowerCase() === 'suspicious').length;
-        const avgLatency = pingData.length
-          ? roundTo(pingData.reduce((acc, ping) => acc + Number(ping.latency_ms || 0), 0) / pingData.length, 3)
-          : 0;
+      const totalBytes = pingData.reduce((acc, ping) => acc + Number(ping.bytes || 0), 0);
+      const totalPackets = pingData.reduce((acc, ping) => acc + Number(ping.packets || 0), 0);
+      const suspiciousFlows = pingData.filter((ping) => ping.attack_detected || (ping.status || '').toLowerCase() === 'suspicious').length;
+      const avgLatency = pingData.length
+        ? roundTo(pingData.reduce((acc, ping) => acc + Number(ping.latency_ms || 0), 0) / pingData.length, 3)
+        : 0;
 
-        setStats({
-          ...(pingStatsRes.data || {}),
-          total_bytes: totalBytes,
-          total_packets: totalPackets,
-          total_flows: pingData.length,
-          active_flows: pingData.filter((ping) => (ping.status || '').toLowerCase() === 'active').length,
-          suspicious_flows: suspiciousFlows,
-          bandwidth_in: `${roundTo(pingData.reduce((acc, ping) => acc + Number(ping.bandwidth_mbps || 0), 0), 2)} Mbps`,
-          avg_latency_ms: avgLatency,
-        });
+      setStats({
+        ...(pingStatsRes.data || {}),
+        total_bytes: totalBytes,
+        total_packets: totalPackets,
+        total_flows: pingData.length,
+        active_flows: pingData.filter((ping) => (ping.status || '').toLowerCase() === 'active').length,
+        suspicious_flows: suspiciousFlows,
+        bandwidth_in: `${roundTo(pingData.reduce((acc, ping) => acc + Number(ping.bandwidth_mbps || 0), 0), 2)} Mbps`,
+        avg_latency_ms: avgLatency,
+      });
 
-        if (statusRes.data?.hosts?.length > 1) {
-          setPingSelection({ src: statusRes.data.hosts[0], dst: statusRes.data.hosts[1] });
-        }
-      } catch (error) {
-        console.error('Error fetching traffic data:', error);
-      } finally {
-        setLoading(false);
+      if (statusRes.data?.hosts?.length > 1) {
+        setPingSelection({ src: statusRes.data.hosts[0], dst: statusRes.data.hosts[1] });
       }
-    };
+    } catch (error) {
+      console.error('Error fetching traffic data:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
 
-    loadTrafficData();
-    const interval = setInterval(loadTrafficData, 5000);
+  useEffect(() => {
+    fetchTrafficData();
+    const interval = setInterval(fetchTrafficData, 5000);
     return () => clearInterval(interval);
   }, []);
 
@@ -196,9 +198,14 @@ export default function TrafficAnalysis() {
 
   const openPingTest = async () => {
     try {
+      setPingRunning(true);
       await trafficAPI.runPingTest(pingSelection.src, pingSelection.dst);
+      // refresh results after running the ping
+      await fetchTrafficData();
     } catch (error) {
       console.error('Ping test failed:', error);
+    } finally {
+      setPingRunning(false);
     }
   };
 
@@ -209,7 +216,7 @@ export default function TrafficAnalysis() {
       <div className="d-flex flex-column flex-lg-row justify-content-between align-items-lg-center gap-3 mb-3">
         <div>
           <h2 className="mb-1">Traffic</h2>
-          <p className="text-muted mb-0">Overview, live activity, flows, analysis, attacks, history, and filters. Traffic tests now run from the Mininet terminal in VS Code.</p>
+          <p className="text-muted mb-0">Overview, live activity, flows, analysis, attacks, history, and filters. Run ping tests from this dashboard (select hosts and click Run Ping).</p>
         </div>
         <div className="text-muted small">
           {trafficFlows.length} flows tracked, {alerts.length} alerts, {hosts.length} hosts
@@ -358,7 +365,7 @@ export default function TrafficAnalysis() {
           <div className="card-body">
             <div className="d-flex flex-column flex-lg-row justify-content-between align-items-lg-center gap-2 mb-3">
               <div className="text-muted small">
-                {pingFlows.length} ping event(s) recorded. Run from Mininet terminal: <code>h16 ping -c7 h15</code>
+                {pingFlows.length} ping event(s) recorded. Run from dashboard or Mininet terminal.
               </div>
               <div className="d-flex gap-2">
                 <select className="form-select form-select-sm" value={pingSelection.src} onChange={(event) => setPingSelection((prev) => ({ ...prev, src: event.target.value }))}>
@@ -367,7 +374,9 @@ export default function TrafficAnalysis() {
                 <select className="form-select form-select-sm" value={pingSelection.dst} onChange={(event) => setPingSelection((prev) => ({ ...prev, dst: event.target.value }))}>
                   {hosts.map((host) => <option key={host} value={host}>{host}</option>)}
                 </select>
-                <button type="button" className="btn btn-sm btn-outline-primary" onClick={openPingTest}>Run Ping</button>
+                <button type="button" className="btn btn-sm btn-outline-primary" onClick={openPingTest} disabled={pingRunning}>
+                  {pingRunning ? 'Running…' : 'Run Ping'}
+                </button>
               </div>
             </div>
             <div className="table-responsive">

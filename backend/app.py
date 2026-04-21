@@ -549,63 +549,74 @@ def topology_links():
 
 @app.route('/api/controller/report', methods=['POST'])
 def controller_report():
-    data = request.get_json() or {}
-    flows = data.get('flows', [])
-    switches = data.get('switches', {})
-    port_stats = data.get('port_stats', {})
-    attackers = data.get('attackers', [])
+    try:
+        data = request.get_json(force=True) or {}
 
-    with net.lock:
-        # Merge flows
-        for flow in flows:
-            net.flow_counter += 1
-            is_ping = (flow.get("activity_type") or "").lower() == "ping" or (flow.get("protocol") or "").upper() == "ICMP" or "ping" in (flow.get("command") or "").lower()
-            flow_entry = {
-                'id': flow.get('id', f'FLOW-{net.flow_counter:04d}'),
-                'src_host': flow.get('src_host'),
-                'src_ip': flow.get('src_ip'),
-                'dst_host': flow.get('dst_host'),
-                'dst_ip': flow.get('dst_ip'),
-                'protocol': flow.get('protocol', 'ICMP'),
-                'bytes': flow.get('bytes', 64),
-                'packets': flow.get('packets', 1),
-                'latency_ms': flow.get('latency_ms', 0.0),
-                'bandwidth_mbps': flow.get('bandwidth_mbps'),
-                'status': flow.get('status', flow_status({'role': 'unknown'}, {'role': 'unknown'})),
-                'timestamp': now_iso(),
-                'command': flow.get('command'),
-                'activity_type': flow.get('activity_type', 'ping' if is_ping else 'controller'),
-            }
-            net.flows.append(flow_entry)
-            if is_ping:
-                record_ping_event(
-                    flow_entry,
-                    flow.get("generated_alerts", []),
-                    flow_entry.get("src_host"),
-                    flow_entry.get("dst_host"),
-                    origin="controller",
-                )
-        net.flows = net.flows[-200:]
+        print("Incoming data:", data)  # 🔥 DEBUG
 
-        # Update switches metadata
-        for sid, sdata in switches.items():
-            if sid not in net.switches:
-                net.switches[sid] = sdata
+        flows = data.get('flows')
+        
+        # ✅ HANDLE SIMPLE FORMAT (fallback)
+        if not flows:
+            if 'src' in data and 'dst' in data:
+                flows = [{
+                    "src_ip": data.get("src"),
+                    "dst_ip": data.get("dst"),
+                    "protocol": data.get("proto", "ICMP"),
+                    "activity_type": "ping"
+                }]
             else:
-                net.switches[sid].update(sdata)
+                flows = []
 
-        # Save port stats if provided
-        for sid, pst in port_stats.items():
-            net.switches.setdefault(sid, {}).setdefault('port_stats', {})
-            net.switches[sid]['port_stats'].update(pst)
+        switches = data.get('switches', {})
+        port_stats = data.get('port_stats', {})
+        attackers = data.get('attackers', [])
 
-        # Record attackers
-        for atk in attackers:
-            if atk not in net.blocked_ips:
-                net.blocked_ips.append(atk)
+        with net.lock:
+            for flow in flows:
+                net.flow_counter += 1
 
-    return jsonify({'status': 'ok', 'received': {'flows': len(flows), 'switches': len(switches)}})
+                is_ping = (
+                    (flow.get("activity_type") or "").lower() == "ping"
+                    or (flow.get("protocol") or "").upper() == "ICMP"
+                    or "ping" in (flow.get("command") or "").lower()
+                )
 
+                flow_entry = {
+                    'id': flow.get('id', f'FLOW-{net.flow_counter:04d}'),
+                    'src_host': flow.get('src_host'),
+                    'src_ip': flow.get('src_ip'),
+                    'dst_host': flow.get('dst_host'),
+                    'dst_ip': flow.get('dst_ip'),
+                    'protocol': flow.get('protocol', 'ICMP'),
+                    'bytes': flow.get('bytes', 64),
+                    'packets': flow.get('packets', 1),
+                    'latency_ms': flow.get('latency_ms', 0.0),
+                    'bandwidth_mbps': flow.get('bandwidth_mbps'),
+                    'status': 'active',  # 🔥 avoid crash from flow_status
+                    'timestamp': now_iso(),
+                    'command': flow.get('command'),
+                    'activity_type': flow.get('activity_type', 'ping' if is_ping else 'controller'),
+                }
+
+                net.flows.append(flow_entry)
+
+                if is_ping:
+                    record_ping_event(
+                        flow_entry,
+                        flow.get("generated_alerts", []),
+                        flow_entry.get("src_host"),
+                        flow_entry.get("dst_host"),
+                        origin="controller",
+                    )
+
+            net.flows = net.flows[-200:]
+
+        return jsonify({'status': 'ok', 'received': len(flows)}), 200
+
+    except Exception as e:
+        print("🔥 ERROR:", str(e))
+        return jsonify({'error': str(e)}), 500
 
 @app.route("/api/topology/nodes")
 def topology_nodes():
