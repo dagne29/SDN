@@ -67,8 +67,9 @@ export const pingAPI = {
   },
   getLatest: () => apiClient.get('/pings/latest'),
   getStats: () => apiClient.get('/pings/stats'),
+  clearAll: ({ includeFlows = true } = {}) => apiClient.delete(`/pings?include_flows=${includeFlows ? 'true' : 'false'}`),
+  ingest: (payload) => apiClient.post('/pings/ingest', payload),
 };
-
 // IDS API
 export const idsAPI = {
   getAlerts: (limit = 50, severity = null) => {
@@ -76,8 +77,11 @@ export const idsAPI = {
     if (severity) url += `&severity=${severity}`;
     return apiClient.get(url);
   },
+  clearAlerts: () => apiClient.delete('/ids/alerts'),
   acknowledgeAlert: (alertId) => apiClient.put(`/ids/alerts/${alertId}/acknowledge`),
   resolveAlert: (alertId) => apiClient.put(`/ids/alerts/${alertId}/resolve`),
+  blockAlert: (alertId) => apiClient.put(`/ids/alerts/${alertId}/block`),
+  clearAlert: (alertId) => apiClient.put(`/ids/alerts/${alertId}/clear`),
   getStatistics: () => apiClient.get('/ids/statistics'),
   getRules: () => apiClient.get('/ids/rules'),
 };

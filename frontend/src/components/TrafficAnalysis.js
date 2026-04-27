@@ -1,33 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Link, useLocation } from 'react-router-dom';
-import { mininetAPI, pingAPI, trafficAPI } from '../services/api';
-
-const trafficSections = [
-  { key: 'overview', label: 'Overview', path: '/traffic' },
-  { key: 'live', label: 'Live Traffic', path: '/traffic/live' },
-  { key: 'table', label: 'Flow Table', path: '/traffic/table' },
-  { key: 'pings', label: 'Ping Results', path: '/traffic/pings' },
-  { key: 'analyzer', label: 'Analyzer', path: '/traffic/analyzer' },
-  { key: 'attack', label: 'Attack Traffic', path: '/traffic/attack' },
-  { key: 'history', label: 'History', path: '/traffic/history' },
-  { key: 'filters', label: 'Filters', path: '/traffic/filters' },
-];
-
-function SectionNav({ activeKey }) {
-  return (
-    <div className="d-flex flex-wrap gap-2 mb-4">
-      {trafficSections.map((section) => (
-        <Link
-          key={section.key}
-          to={section.path}
-          className={`btn btn-sm ${activeKey === section.key ? 'btn-primary' : 'btn-outline-primary'}`}
-        >
-          {section.label}
-        </Link>
-      ))}
-    </div>
-  );
-}
+import { useLocation } from 'react-router-dom';
+import apiClient, { mininetAPI, pingAPI, trafficAPI } from '../services/api';
+import { appendPingHistory, clearPingHistory, formatPingTimelineTime, getPingSequence, getPingTimeMs, mergePingHistory, readPingHistory } from '../services/pingHistory';
 
 function MetricCard({ title, value, detail, accent = 'primary' }) {
   return (
@@ -66,18 +40,124 @@ function BarList({ items, getLabel, getValue, maxValue }) {
   );
 }
 
+function groupPingRequests(flows) {
+  const sorted = [...flows].sort((a, b) => {
+    const ta = Date.parse(a?.timestamp || a?.time || '') || 0;
+    const tb = Date.parse(b?.timestamp || b?.time || '') || 0;
+    return tb - ta;
+  });
+
+  const groups = [];
+  const used = new Set();
+
+  sorted.forEach((flow, index) => {
+    if (!flow || used.has(flow.id)) return;
+
+    const origin = (flow.origin || '').toString().toLowerCase();
+    if (!origin.includes('pingall')) {
+      groups.push(flow);
+      used.add(flow.id);
+      return;
+    }
+
+    const baseTime = Date.parse(flow?.timestamp || flow?.time || '') || 0;
+    const cluster = [flow];
+    used.add(flow.id);
+
+    for (let i = index + 1; i < sorted.length; i += 1) {
+      const candidate = sorted[i];
+      if (!candidate || used.has(candidate.id)) continue;
+      const candidateOrigin = (candidate.origin || '').toString().toLowerCase();
+      if (!candidateOrigin.includes('pingall')) continue;
+      const candidateTime = Date.parse(candidate?.timestamp || candidate?.time || '') || 0;
+      if (Math.abs(baseTime - candidateTime) > 5000) continue;
+      cluster.push(candidate);
+      used.add(candidate.id);
+    }
+
+    const successCount = cluster.filter((item) => (item.status || '').toLowerCase() === 'success').length;
+    const avgLatency = cluster.length
+      ? roundTo(cluster.reduce((sum, item) => sum + Number(item.latency_ms || 0), 0) / cluster.length, 3)
+      : 0;
+
+    groups.push({
+      ...flow,
+      id: `PINGALL-${flow.id}`,
+      src_host: 'All Hosts',
+      dst_host: `${cluster.length} connections`,
+      status: successCount === cluster.length ? 'success' : successCount > 0 ? 'partial' : 'failed',
+      latency_ms: avgLatency,
+      round_trip_time: `${avgLatency} ms avg`,
+      packets: cluster.reduce((sum, item) => sum + Number(item.packets || 0), 0),
+      packets_transmitted: cluster.reduce((sum, item) => sum + Number(item.packets_transmitted ?? item.packets ?? 0), 0),
+      packets_received: cluster.reduce((sum, item) => sum + Number(item.packets_received ?? 0), 0),
+      bytes: cluster.reduce((sum, item) => sum + Number(item.bytes || 0), 0),
+      packet_loss: `${cluster.length - successCount} failed`,
+      output: `Pingall summary: ${cluster.length} connections tested, ${successCount} successful, ${cluster.length - successCount} failed.`,
+      grouped_flows: cluster,
+      is_grouped_pingall: true,
+    });
+  });
+
+  return groups;
+}
+
 export default function TrafficAnalysis() {
+  const apiBaseUrl = apiClient?.defaults?.baseURL || '';
   const location = useLocation();
   const [flows, setFlows] = useState([]);
+  const [archivedFlows, setArchivedFlows] = useState(() => readPingHistory());
+  const [recentPingsClearedAt, setRecentPingsClearedAt] = useState(() => {
+    try {
+      const raw = window?.localStorage?.getItem('sdn_recent_pings_cleared_at_v1');
+      const value = raw ? Number(raw) : 0;
+      return Number.isFinite(value) ? value : 0;
+    } catch (e) {
+      return 0;
+    }
+  });
+  const [recentPingsClearedAfterId, setRecentPingsClearedAfterId] = useState(() => {
+    try {
+      return window?.localStorage?.getItem('sdn_recent_pings_cleared_after_id_v1') || '';
+    } catch (e) {
+      return '';
+    }
+  });
   const [stats, setStats] = useState(null);
   const [hosts, setHosts] = useState([]);
   const [alerts, setAlerts] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [pingSelection, setPingSelection] = useState({ src: 'h1', dst: 'h2' });
+  const [refreshing, setRefreshing] = useState(false);
+  const [pingSelection, setPingSelection] = useState({ src: 'user1', dst: 'mail_srv' });
   const [pingRunning, setPingRunning] = useState(false);
   const [filterHost, setFilterHost] = useState('all');
   const [filterProtocol, setFilterProtocol] = useState('all');
   const [filterWindow, setFilterWindow] = useState('24h');
+
+  const handleClearRecentPingActivity = async () => {
+    try {
+      await pingAPI.clearAll({ includeFlows: true });
+      clearPingHistory();
+      setFlows([]);
+      setArchivedFlows([]);
+      setRecentPingsClearedAt(0);
+      setRecentPingsClearedAfterId('');
+      try {
+        window?.localStorage?.removeItem('sdn_recent_pings_cleared_at_v1');
+        window?.localStorage?.removeItem('sdn_recent_pings_cleared_after_id_v1');
+      } catch (e) {
+        // ignore
+      }
+      try {
+        window?.dispatchEvent(new CustomEvent('sdn_recent_pings_cleared', { detail: { clearedAt: 0, clearedAfterId: '' } }));
+      } catch (e) {
+        // ignore
+      }
+      await fetchTrafficData();
+    } catch (e) {
+      console.error('Failed to clear recent ping activity:', e);
+    }
+  };
 
   const activeKey = useMemo(() => {
     if (location.pathname.startsWith('/traffic/live')) return 'live';
@@ -101,24 +181,27 @@ export default function TrafficAnalysis() {
 
       const pingData = pingsRes.data || [];
       setFlows(pingData);
+      const nextArchive = appendPingHistory(pingData, { max: 200 });
+      setArchivedFlows(nextArchive);
       setHosts(statusRes.data?.hosts || []);
       setAlerts(pingData.filter((ping) => ping.attack_detected || ((ping.generated_alerts || []).length > 0)));
 
-      const totalBytes = pingData.reduce((acc, ping) => acc + Number(ping.bytes || 0), 0);
-      const totalPackets = pingData.reduce((acc, ping) => acc + Number(ping.packets || 0), 0);
-      const suspiciousFlows = pingData.filter((ping) => ping.attack_detected || (ping.status || '').toLowerCase() === 'suspicious').length;
-      const avgLatency = pingData.length
-        ? roundTo(pingData.reduce((acc, ping) => acc + Number(ping.latency_ms || 0), 0) / pingData.length, 3)
+      const combined = mergePingHistory(nextArchive, pingData, { max: 200 });
+      const totalBytes = combined.reduce((acc, ping) => acc + Number(ping.bytes || 0), 0);
+      const totalPackets = combined.reduce((acc, ping) => acc + Number(ping.packets || 0), 0);
+      const suspiciousFlows = combined.filter((ping) => ping.attack_detected || (ping.status || '').toLowerCase() === 'suspicious').length;
+      const avgLatency = combined.length
+        ? roundTo(combined.reduce((acc, ping) => acc + Number(ping.latency_ms || 0), 0) / combined.length, 3)
         : 0;
 
       setStats({
         ...(pingStatsRes.data || {}),
         total_bytes: totalBytes,
         total_packets: totalPackets,
-        total_flows: pingData.length,
-        active_flows: pingData.filter((ping) => (ping.status || '').toLowerCase() === 'active').length,
+        total_flows: combined.length,
+        active_flows: combined.filter((ping) => (ping.status || '').toLowerCase() === 'active').length,
         suspicious_flows: suspiciousFlows,
-        bandwidth_in: `${roundTo(pingData.reduce((acc, ping) => acc + Number(ping.bandwidth_mbps || 0), 0), 2)} Mbps`,
+        bandwidth_in: `${roundTo(combined.reduce((acc, ping) => acc + Number(ping.bandwidth_mbps || 0), 0), 2)} Mbps`,
         avg_latency_ms: avgLatency,
       });
 
@@ -138,17 +221,65 @@ export default function TrafficAnalysis() {
     return () => clearInterval(interval);
   }, []);
 
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    try {
+      await fetchTrafficData();
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  useEffect(() => {
+    const handler = (event) => {
+      const next = Number(event?.detail?.clearedAt || 0);
+      if (!Number.isFinite(next) || next <= 0) return;
+      setRecentPingsClearedAt(next);
+      if (event?.detail?.clearedAfterId) {
+        setRecentPingsClearedAfterId(String(event.detail.clearedAfterId));
+      }
+    };
+    window.addEventListener('sdn_recent_pings_cleared', handler);
+    return () => window.removeEventListener('sdn_recent_pings_cleared', handler);
+  }, []);
+
   function roundTo(value, digits) {
     const factor = 10 ** digits;
     return Math.round(value * factor) / factor;
   }
 
-  const trafficFlows = flows.filter((flow) => flow);
+  const trafficFlows = useMemo(() => {
+    const merged = mergePingHistory(archivedFlows, flows, { max: 200 });
+    return merged.filter((flow) => flow);
+  }, [archivedFlows, flows]);
   const pingFlows = trafficFlows.filter((flow) => {
     const activityType = (flow.activity_type || '').toString().toLowerCase();
     const cmd = (flow.command || '').toString().toLowerCase();
     return activityType === 'ping' || cmd.includes('ping');
   });
+  const visiblePingFlows = useMemo(() => {
+    if (recentPingsClearedAfterId) {
+      const clearedSeq = getPingSequence({ id: recentPingsClearedAfterId });
+      return pingFlows.filter((flow) => {
+        const seq = getPingSequence(flow);
+        if (seq != null && clearedSeq != null) return seq > clearedSeq;
+        const key = (flow?.id || flow?.flow_id || '').toString();
+        if (key) return key !== recentPingsClearedAfterId;
+        const t = getPingTimeMs(flow);
+        return t > recentPingsClearedAt;
+      });
+    }
+    if (!recentPingsClearedAt) return pingFlows;
+    return pingFlows.filter((flow) => {
+      const t = getPingTimeMs(flow);
+      return t > recentPingsClearedAt;
+    });
+  }, [pingFlows, recentPingsClearedAt, recentPingsClearedAfterId]);
+  const groupedVisiblePingFlows = useMemo(() => groupPingRequests(visiblePingFlows), [visiblePingFlows]);
+  const recentPingActivity = useMemo(
+    () => [...groupedVisiblePingFlows].sort((a, b) => getPingTimeMs(a) - getPingTimeMs(b)).slice(-4),
+    [groupedVisiblePingFlows]
+  );
   const suspiciousFlows = trafficFlows.filter((flow) => {
     const status = (flow.status || '').toString().toLowerCase();
     const src = (flow.src_host || '').toString().toLowerCase();
@@ -218,12 +349,15 @@ export default function TrafficAnalysis() {
           <h2 className="mb-1">Traffic</h2>
           <p className="text-muted mb-0">Overview, live activity, flows, analysis, attacks, history, and filters. Run ping tests from this dashboard (select hosts and click Run Ping).</p>
         </div>
-        <div className="text-muted small">
-          {trafficFlows.length} flows tracked, {alerts.length} alerts, {hosts.length} hosts
+        <div className="d-flex align-items-center gap-2">
+          <div className="text-muted small">
+            {trafficFlows.length} flows tracked, {alerts.length} alerts, {hosts.length} hosts
+          </div>
+          <button type="button" className="btn btn-sm btn-outline-secondary" onClick={handleRefresh} disabled={refreshing}>
+            <i className="bi bi-arrow-clockwise me-1" /> Refresh
+          </button>
         </div>
       </div>
-
-      <SectionNav activeKey={activeKey} />
 
       {activeKey === 'overview' ? (
         <>
@@ -364,21 +498,61 @@ export default function TrafficAnalysis() {
           </div>
           <div className="card-body">
             <div className="d-flex flex-column flex-lg-row justify-content-between align-items-lg-center gap-2 mb-3">
-              <div className="text-muted small">
-                {pingFlows.length} ping event(s) recorded. Run from dashboard or Mininet terminal.
-              </div>
-              <div className="d-flex gap-2">
-                <select className="form-select form-select-sm" value={pingSelection.src} onChange={(event) => setPingSelection((prev) => ({ ...prev, src: event.target.value }))}>
-                  {hosts.map((host) => <option key={host} value={host}>{host}</option>)}
-                </select>
-                <select className="form-select form-select-sm" value={pingSelection.dst} onChange={(event) => setPingSelection((prev) => ({ ...prev, dst: event.target.value }))}>
-                  {hosts.map((host) => <option key={host} value={host}>{host}</option>)}
-                </select>
-                <button type="button" className="btn btn-sm btn-outline-primary" onClick={openPingTest} disabled={pingRunning}>
-                  {pingRunning ? 'Running…' : 'Run Ping'}
-                </button>
+                <div className="text-muted small">
+                {groupedVisiblePingFlows.length} ping request(s) shown (raw events: {pingFlows.length}). Run from dashboard or Mininet terminal.
               </div>
             </div>
+            <div className="card border-0 bg-light mb-4">
+              <div className="card-body">
+                <div className="d-flex flex-column flex-lg-row justify-content-between align-items-lg-center gap-2 mb-3">
+                  <div>
+                    <div className="fw-semibold">Recent Ping Activity</div>
+                    <div className="small text-muted">Latest ping events now appear here instead of the sidebar.</div>
+                  </div>
+                  <button type="button" className="btn btn-sm btn-danger" onClick={handleClearRecentPingActivity}>
+                    <i className="bi bi-trash3 me-1" />
+                    Clear Recent Activity
+                  </button>
+                </div>
+                {recentPingActivity.length ? (
+                  <div className="row g-3">
+                    {recentPingActivity.map((flow, index) => (
+                      <div key={flow.id} className="col-12 col-xl-6">
+                        <div className="card h-100 shadow-sm border-0">
+                          <div className="card-body">
+                            <div className="d-flex justify-content-between align-items-start gap-3 mb-2">
+                              <div className="fw-semibold">
+                                #{String(index + 1).padStart(2, '0')} {flow.src_host || flow.src_ip || '—'} → {flow.dst_host || flow.dst_ip || '—'}
+                              </div>
+                              <span className={`badge ${(flow.status || '').toLowerCase().includes('success') ? 'bg-success' : 'bg-danger'}`}>
+                                {flow.status || 'unknown'}
+                              </span>
+                            </div>
+                            <div className="small text-muted mb-1">{flow.protocol || 'ICMP'} • {flow.packets || 0} pkts • {flow.bytes || 0} bytes</div>
+                            <div className="small text-muted mb-1">RTT: {flow.round_trip_time || (flow.latency_ms != null ? `${flow.latency_ms} ms` : '—')}</div>
+                            <div className="small text-muted mb-2">{formatPingTimelineTime(flow)}</div>
+                            {flow.output ? (
+                              <div className="small" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                                {String(flow.output).trim()}
+                              </div>
+                            ) : null}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="text-muted small">No recent ping activity.</div>
+                )}
+              </div>
+            </div>
+            {!groupedVisiblePingFlows.length ? (
+              <div className="alert alert-warning py-2">
+                Dashboard is querying <code>{apiBaseUrl || '(unknown API base URL)'}</code>. If you pinged in Mininet and still see 0,
+                Mininet is not posting to the same backend. Start Mininet with the reporting topology and set
+                <code className="ms-1">SDN_PING_INGEST_URL</code> to <code>{apiBaseUrl ? `${apiBaseUrl}/pings/ingest` : 'http://&lt;backend&gt;:5000/api/pings/ingest'}</code>.
+              </div>
+            ) : null}
             <div className="table-responsive">
               <table className="table table-sm table-striped align-middle">
                 <thead className="table-light">
@@ -396,7 +570,7 @@ export default function TrafficAnalysis() {
                   </tr>
                 </thead>
                 <tbody>
-                  {pingFlows.slice().reverse().slice(0, 25).map((flow) => (
+                  {groupedVisiblePingFlows.slice(0, 25).map((flow) => (
                     <tr key={flow.id}>
                       <td className="fw-semibold">{flow.src_host || flow.src_ip || '—'} → {flow.dst_host || flow.dst_ip || '—'}</td>
                       <td className="small text-muted">{flow.src_ip || '—'}</td>
@@ -407,7 +581,7 @@ export default function TrafficAnalysis() {
                         </span>
                       </td>
                       <td>
-                        <span className={`badge ${(flow.status || '').toLowerCase().includes('success') ? 'bg-success' : 'bg-danger'}`}>
+                        <span className={`badge ${(flow.status || '').toLowerCase().includes('success') ? 'bg-success' : (flow.status || '').toLowerCase().includes('partial') ? 'bg-warning text-dark' : 'bg-danger'}`}>
                           {flow.status || 'unknown'}
                         </span>
                       </td>
@@ -432,7 +606,7 @@ export default function TrafficAnalysis() {
                       </td>
                     </tr>
                   ))}
-                  {!pingFlows.length ? (
+                  {!groupedVisiblePingFlows.length ? (
                     <tr>
                       <td colSpan="10" className="text-center text-muted">No ping results yet.</td>
                     </tr>

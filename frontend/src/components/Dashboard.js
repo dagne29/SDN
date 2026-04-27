@@ -2,17 +2,52 @@ import React, { useEffect, useState, useRef } from 'react';
 import 'bootstrap/dist/css/bootstrap.min.css';
 import { useNavigate } from 'react-router-dom';
 import { dashboardAPI, mininetAPI, pingAPI, trafficAPI } from '../services/api';
+import { appendPingHistory, clearPingHistory, formatPingTimelineTime, getPingKey, getPingSequence, getPingTimeMs, normalizePingEntry, readPingHistory } from '../services/pingHistory';
 import './Dashboard.css';
 
 export default function Dashboard() {
+  const [showClearBtn, setShowClearBtn] = useState(true);
   const navigate = useNavigate();
   const [dashboardData, setDashboardData] = useState(null);
   const [mininetStatus, setMininetStatus] = useState(null);
   const [pingResult, setPingResult] = useState(null);
+  const [pingHistory, setPingHistory] = useState(() => readPingHistory());
   const [recentPingEvents, setRecentPingEvents] = useState([]);
   const [feedback, setFeedback] = useState('');
   const [loading, setLoading] = useState(true);
-  const [pingSelection, setPingSelection] = useState({ src: 'h1', dst: 'h2' });
+  const [pingSelection, setPingSelection] = useState({ src: 'user1', dst: 'mail_srv' });
+  const [lastPingClearedAt, setLastPingClearedAt] = useState(() => {
+    try {
+      const raw = window?.localStorage?.getItem('sdn_last_ping_cleared_at_v1');
+      const value = raw ? Number(raw) : 0;
+      return Number.isFinite(value) ? value : 0;
+    } catch (e) {
+      return 0;
+    }
+  });
+  const [lastPingClearedAfterId, setLastPingClearedAfterId] = useState(() => {
+    try {
+      return window?.localStorage?.getItem('sdn_last_ping_cleared_after_id_v1') || '';
+    } catch (e) {
+      return '';
+    }
+  });
+  const [recentPingListClearedAt, setRecentPingListClearedAt] = useState(() => {
+    try {
+      const raw = window?.localStorage?.getItem('sdn_dashboard_recent_pings_cleared_at_v1');
+      const value = raw ? Number(raw) : 0;
+      return Number.isFinite(value) ? value : 0;
+    } catch (e) {
+      return 0;
+    }
+  });
+  const [recentPingListClearedAfterId, setRecentPingListClearedAfterId] = useState(() => {
+    try {
+      return window?.localStorage?.getItem('sdn_dashboard_recent_pings_cleared_after_id_v1') || '';
+    } catch (e) {
+      return '';
+    }
+  });
 
   useEffect(() => {
     const load = async () => {
@@ -27,10 +62,42 @@ export default function Dashboard() {
           pingAPI.getAll({ limit: 10 }),
         ]);
         const latestPing = latestPingRes.data && Object.keys(latestPingRes.data).length ? latestPingRes.data : null;
-        const lastPing = latestPing || dashboardRes.data?.last_ping || dashboardRes.data?.last_ping_result || null;
-        if (lastPing && Object.keys(lastPing).length) setPingResult(lastPing);
-        else setPingResult(null);
-        setRecentPingEvents(recentPingRes.data || dashboardRes.data?.recent_ping_traffic || []);
+        const lastPingCandidate = latestPing || dashboardRes.data?.last_ping || dashboardRes.data?.last_ping_result || null;
+        const lastKey = (lastPingCandidate?.id || lastPingCandidate?.flow_id || '').toString();
+        const lastSeq = getPingSequence(lastPingCandidate);
+        const clearedSeq = lastPingClearedAfterId ? getPingSequence({ id: lastPingClearedAfterId }) : null;
+        const lastPingTime = Date.parse(lastPingCandidate?.timestamp || lastPingCandidate?.time || '') || 0;
+        const lastPing =
+          lastPingCandidate &&
+          (lastPingClearedAfterId
+            ? (lastSeq != null && clearedSeq != null ? lastSeq > clearedSeq : (lastKey ? lastKey !== lastPingClearedAfterId : lastPingTime > lastPingClearedAt))
+            : lastPingTime > lastPingClearedAt)
+            ? lastPingCandidate
+            : null;
+        setPingResult((prev) => {
+          const prevKey = getPingKey(prev);
+          const nextKey = getPingKey(lastPing);
+          if (prevKey && nextKey && prevKey === nextKey) return prev;
+          if (lastPing && Object.keys(lastPing).length) return lastPing;
+          return null;
+        });
+        const recentEvents = recentPingRes.data || dashboardRes.data?.recent_ping_traffic || [];
+        const visibleRecentEvents = recentEvents.filter((item) => {
+          if (recentPingListClearedAfterId) {
+            const seq = getPingSequence(item);
+            const cleared = getPingSequence({ id: recentPingListClearedAfterId });
+            if (seq != null && cleared != null) return seq > cleared;
+            const key = (item?.id || item?.flow_id || '').toString();
+            if (key) return key !== recentPingListClearedAfterId;
+          }
+          const t = Date.parse(item?.timestamp || item?.time || '') || 0;
+          return t > recentPingListClearedAt;
+        });
+        setRecentPingEvents(visibleRecentEvents);
+        if (recentEvents?.length) {
+          const nextHistory = appendPingHistory(recentEvents);
+          setPingHistory(nextHistory);
+        }
         setMininetStatus(statusRes.data);
 
         const hosts = statusRes.data.hosts || [];
@@ -49,6 +116,16 @@ export default function Dashboard() {
     return () => clearInterval(interval);
   }, []);
 
+  useEffect(() => {
+    if (!pingResult) return undefined;
+    const entry = normalizePingEntry(pingResult);
+    if (entry) {
+      const nextHistory = appendPingHistory(entry, { max: 200 });
+      setPingHistory(nextHistory);
+    }
+    return undefined;
+  }, [pingResult]);
+
   const refreshOverview = async () => {
     const response = await dashboardAPI.getOverview();
     setDashboardData(response.data);
@@ -57,10 +134,42 @@ export default function Dashboard() {
       pingAPI.getAll({ limit: 10 }),
     ]);
     const latestPing = latestPingRes.data && Object.keys(latestPingRes.data).length ? latestPingRes.data : null;
-    const lastPing = latestPing || response.data?.last_ping || response.data?.last_ping_result || null;
-    if (lastPing && Object.keys(lastPing).length) setPingResult(lastPing);
-    else setPingResult(null);
-    setRecentPingEvents(recentPingRes.data || response.data?.recent_ping_traffic || []);
+    const lastPingCandidate = latestPing || response.data?.last_ping || response.data?.last_ping_result || null;
+    const lastKey = (lastPingCandidate?.id || lastPingCandidate?.flow_id || '').toString();
+    const lastSeq = getPingSequence(lastPingCandidate);
+    const clearedSeq = lastPingClearedAfterId ? getPingSequence({ id: lastPingClearedAfterId }) : null;
+    const lastPingTime = Date.parse(lastPingCandidate?.timestamp || lastPingCandidate?.time || '') || 0;
+    const lastPing =
+      lastPingCandidate &&
+      (lastPingClearedAfterId
+        ? (lastSeq != null && clearedSeq != null ? lastSeq > clearedSeq : (lastKey ? lastKey !== lastPingClearedAfterId : lastPingTime > lastPingClearedAt))
+        : lastPingTime > lastPingClearedAt)
+        ? lastPingCandidate
+        : null;
+    setPingResult((prev) => {
+      const prevKey = getPingKey(prev);
+      const nextKey = getPingKey(lastPing);
+      if (prevKey && nextKey && prevKey === nextKey) return prev;
+      if (lastPing && Object.keys(lastPing).length) return lastPing;
+      return null;
+    });
+    const recentEvents = recentPingRes.data || response.data?.recent_ping_traffic || [];
+    const visibleRecentEvents = recentEvents.filter((item) => {
+      if (recentPingListClearedAfterId) {
+        const seq = getPingSequence(item);
+        const cleared = getPingSequence({ id: recentPingListClearedAfterId });
+        if (seq != null && cleared != null) return seq > cleared;
+        const key = (item?.id || item?.flow_id || '').toString();
+        if (key) return key !== recentPingListClearedAfterId;
+      }
+      const t = getPingTimeMs(item);
+      return t > recentPingListClearedAt;
+    });
+    setRecentPingEvents(visibleRecentEvents);
+    if (recentEvents?.length) {
+      const nextHistory = appendPingHistory(recentEvents);
+      setPingHistory(nextHistory);
+    }
   };
 
   const handlePingTest = async () => {
@@ -112,6 +221,52 @@ export default function Dashboard() {
     navigate(`/alerts/${alert.id}`);
   };
 
+  const handleClearPingActivity = async () => {
+    try {
+      await pingAPI.clearAll({ includeFlows: true });
+      clearPingHistory();
+      setPingHistory([]);
+      setRecentPingEvents([]);
+      setRecentPingListClearedAt(0);
+      setRecentPingListClearedAfterId('');
+      setPingResult(null);
+      setFeedback('Recent ping activity deleted.');
+      try {
+        window.localStorage?.removeItem('sdn_dashboard_recent_pings_cleared_at_v1');
+        window.localStorage?.removeItem('sdn_dashboard_recent_pings_cleared_after_id_v1');
+        window.localStorage?.removeItem('sdn_last_ping_cleared_at_v1');
+        window.localStorage?.removeItem('sdn_last_ping_cleared_after_id_v1');
+      } catch (e) {
+        // ignore
+      }
+      await refreshOverview();
+    } catch (e) {
+      console.error('Failed to clear recent ping activity:', e);
+      setFeedback('Failed to delete recent ping activity.');
+    }
+  };
+
+  const handleClearLastPing = () => {
+    const clearedAt = Date.now();
+    setLastPingClearedAt(clearedAt);
+    try {
+      window.localStorage?.setItem('sdn_last_ping_cleared_at_v1', String(clearedAt));
+    } catch (e) {
+      // ignore
+    }
+    try {
+      const key = getPingKey(pingResult);
+      if (key) {
+        setLastPingClearedAfterId(key);
+        window.localStorage?.setItem('sdn_last_ping_cleared_after_id_v1', String(key));
+      }
+    } catch (e) {
+      // ignore
+    }
+    setPingResult(null);
+    setFeedback('Last ping cleared.');
+  };
+
   if (loading) {
     return (
       <div className="dashboard-container">
@@ -136,6 +291,38 @@ export default function Dashboard() {
     pingResult &&
     (pingResult.id || pingResult.flow_id || pingResult.command || pingResult.output || pingResult.src_host || pingResult.dst_host)
   );
+
+  const mergedPingHistory = (() => {
+    const merged = [...pingHistory, ...(recentPingEvents || [])];
+    const seen = new Set();
+    const deduped = merged.filter((item) => {
+      const id = item?.id || item?.flow_id || `${item?.src_host || ''}-${item?.dst_host || ''}-${item?.timestamp || ''}`;
+      if (seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    });
+    const sorted = deduped.sort((a, b) => getPingTimeMs(b) - getPingTimeMs(a));
+    if (recentPingListClearedAfterId) {
+      const cleared = getPingSequence({ id: recentPingListClearedAfterId });
+      return sorted.filter((item) => {
+        const seq = getPingSequence(item);
+        if (seq != null && cleared != null) return seq > cleared;
+        const key = (item?.id || item?.flow_id || '').toString();
+        if (key) return key !== recentPingListClearedAfterId;
+        const t = getPingTimeMs(item);
+        return t > recentPingListClearedAt;
+      });
+    }
+    if (!recentPingListClearedAt) return sorted;
+    return sorted.filter((item) => {
+      const t = getPingTimeMs(item);
+      return t > recentPingListClearedAt;
+    });
+  })();
+
+  const sequentialRecentPingHistory = [...mergedPingHistory]
+    .sort((a, b) => getPingTimeMs(a) - getPingTimeMs(b))
+    .slice(-5);
 
   return (
     <div className="dashboard-container">
@@ -165,12 +352,16 @@ export default function Dashboard() {
               </div>
             ) : null}
 
-            <button className="btn btn-outline-primary" onClick={refreshOverview}>
-              <i className="bi bi-arrow-clockwise me-1" /> Refresh
-            </button>
-            <button className="btn btn-primary" onClick={() => navigate('/topology')}>
-              <i className="bi bi-map me-1" /> Topology
-            </button>
+           <button className="btn btn-outline-primary" onClick={refreshOverview}>
+  <i className="bi bi-arrow-clockwise me-1" /> Refresh
+</button>
+
+{showClearBtn && (
+  <button className="btn btn-outline-secondary" onClick={handleClearLastPing}>
+    Clear Last Ping
+  </button>
+)}
+            
           </div>
         </div>
         <div className="overview-section">
@@ -233,59 +424,9 @@ export default function Dashboard() {
               <h3>Health</h3>
               <div className="stat-value text-success">{dashboardData?.system_health || 'good'}</div>
               <div className="stat-description">Overall network condition</div>
-            </div>
-          </div>
+            </div>          </div>
 
-          <div className="control-panel">
-            <h3>Mininet Control Panel</h3>
-            {feedback ? <div className="alert alert-info py-2">{feedback}</div> : null}
-
-            <div className="row g-4">
-              <div className="col-12 col-xl-7">
-                <div className="card h-100">
-                  <div className="card-header">
-                    <h5>Traffic Commands</h5>
-                  </div>
-                  <div className="card-body">
-                    <div className="command-stack">
-                      <div className="command-row">
-                        <label className="form-label">Ping Test</label>
-                        <div className="command-grid">
-                          <select
-                            className="form-select"
-                            value={pingSelection.src}
-                            onChange={(event) => setPingSelection((prev) => ({ ...prev, src: event.target.value }))}
-                          >
-                            {mininetStatus?.hosts?.map((host) => (
-                              <option key={host} value={host}>{host}</option>
-                            ))}
-                          </select>
-                          <select
-                            className="form-select"
-                            value={pingSelection.dst}
-                            onChange={(event) => setPingSelection((prev) => ({ ...prev, dst: event.target.value }))}
-                          >
-                            {mininetStatus?.hosts?.map((host) => (
-                              <option key={host} value={host}>{host}</option>
-                            ))}
-                          </select>
-                          <button className="btn btn-primary" onClick={handlePingTest}>
-                            Ping
-                          </button>
-                        </div>
-                      </div>
-
-                    </div>
-                    <div className="alert alert-secondary mt-3 mb-0">
-                      Run traffic tests from the Mininet terminal in VS Code, for example:
-                      <div className="mt-2">
-                        <code>h1 iperf h3</code>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
+          <div className="row mt-4 g-4">
               <div className="col-12 col-xl-5">
                 <div className="card h-100">
                   <div className="card-header">
@@ -417,7 +558,7 @@ export default function Dashboard() {
                       </table>
                     </div>
                   ) : (
-                    <p className="text-muted mb-0">No ping request has been executed yet.</p>
+                    <p className="text-muted mb-0">No ping result in the last 10 seconds.</p>
                   )}
                 </div>
               </div>
@@ -431,7 +572,7 @@ export default function Dashboard() {
                 <div className="card-body">
                   <p className="mb-2">Traffic tests now run from the Mininet terminal in VS Code.</p>
                   <p className="text-muted mb-0">
-                    Example: <code>h1 iperf h3</code>
+                    Example: <code>user1 iperf mail_srv</code>
                   </p>
                 </div>
               </div>
@@ -442,27 +583,34 @@ export default function Dashboard() {
             <div className="col-12 col-xl-6">
               <div className="card h-100">
                 <div className="card-header">
-                  <h5>Recent Ping Activity</h5>
+                  <div className="d-flex justify-content-between align-items-center gap-2">
+                    <h5 className="mb-0">Recent Ping Activity</h5>
+                    <button type="button" className="btn btn-sm btn-outline-secondary" onClick={handleClearPingActivity}>
+                      Clear
+                    </button>
+                  </div>
                 </div>
                 <div className="card-body">
-                  {recentPingEvents.length ? (
+                  {mergedPingHistory.length ? (
                     <div className="list-group list-group-flush">
-                      {recentPingEvents.slice().reverse().slice(0, 5).map((flow) => (
+                      {sequentialRecentPingHistory.map((flow, index) => (
                         <div
-                          key={flow.id}
+                          key={flow.id || `${flow.src_host}-${flow.dst_host}-${flow.timestamp}`}
                           className="list-group-item list-group-item-action"
-                          onClick={() => handleFlowClick(flow)}
+                          onClick={() => (flow.id ? handleFlowClick(flow) : null)}
                           role="button"
-                          style={{ cursor: 'pointer' }}
+                          style={{ cursor: flow.id ? 'pointer' : 'default' }}
                         >
                           <div className="d-flex justify-content-between gap-3">
                             <small className="text-muted">
+                              <strong>#{String(index + 1).padStart(2, '0')}</strong>
+                              {' | '}
                               <strong>{flow.src_host}</strong> → <strong>{flow.dst_host}</strong>
                               {' '}| {flow.protocol}
                               {' '}| {flow.packets} packets
                               {' '}| {flow.bytes} bytes
                             </small>
-                            <small className="text-muted">{flow.timestamp}</small>
+                            <small className="text-muted">{formatPingTimelineTime(flow)}</small>
                           </div>
                           <div className="d-flex justify-content-between gap-3 mt-1">
                             <small className="text-muted">Flow ID: <code>{flow.id}</code></small>
@@ -516,6 +664,5 @@ export default function Dashboard() {
           </div>
         </div>
       </div>
-    </div>
   );
 }

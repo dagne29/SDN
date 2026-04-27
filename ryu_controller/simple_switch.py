@@ -123,12 +123,12 @@ class AdvancedSDNController(app_manager.RyuApp):
             if tcp_pkt.bits & tcp.TCP_SYN:
                 self.tcp_syn_counter[src_ip] += 1
 
-                if self.tcp_syn_counter[src_ip] > 50:
+                if self.tcp_syn_counter[src_ip] > 100:
                     self.logger.warning(f"⚠️ SYN Flood detected: {src_ip}")
                     self.block_ip(datapath, src_ip)
 
         # Port Scan Detection (many packets quickly)
-        if self.ip_counter[src_ip] > 200:
+        if self.ip_counter[src_ip] > 100:
             self.logger.warning(f"⚠️ Port Scan detected: {src_ip}")
             self.block_ip(datapath, src_ip)
 
@@ -221,7 +221,7 @@ class AdvancedSDNController(app_manager.RyuApp):
                             'dst_host': dst_host,
                             'src_ip': src_ip,
                             'dst_ip': dst_ip,
-                            'protocol': 'ICMP',
+                            'protocol': 'ICMP,TCP,UDP',
                             'bytes': 64,
                             'packets': 1,
                             'latency_ms': round(random.uniform(1.0, 80.0), 3),
@@ -243,7 +243,7 @@ class AdvancedSDNController(app_manager.RyuApp):
                             'src_ip': src_ip,
                             'dst_host': dst_host,
                             'dst_ip': dst_ip,
-                            'protocol': 'ICMP',
+                            'protocol': 'ICMP,TCP,UDP',
                             'bytes': 64,
                             'packets': 1,
                             'latency_ms': round(random.uniform(1.0, 80.0), 3),

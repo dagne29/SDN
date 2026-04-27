@@ -4,6 +4,7 @@ import { topologyAPI, mininetAPI } from '../services/api';
 export default function Topology() {
   const [devices, setDevices] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [pinPositions, setPinPositions] = useState(false);
   const [savedPositions, setSavedPositions] = useState(null);
   const [useBackground, setUseBackground] = useState(true);
@@ -310,11 +311,25 @@ export default function Topology() {
     }
   };
 
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    try {
+      await fetchTopology();
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
   if (loading) return <div className="p-5 text-center">Loading topology...</div>;
 
   return (
     <div className="container-fluid p-4">
-      <h2 className="mb-4">Network Topology</h2>
+      <div className="d-flex justify-content-between align-items-center mb-4 gap-2">
+        <h2 className="mb-0">Network Topology</h2>
+        <button type="button" className="btn btn-sm btn-outline-secondary" onClick={handleRefresh} disabled={refreshing}>
+          <i className="bi bi-arrow-clockwise me-1" /> Refresh
+        </button>
+      </div>
 
       <div className="row g-4">
         <div className="col-12">

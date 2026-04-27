@@ -19,31 +19,67 @@ def now_iso():
 class NetworkState:
     def __init__(self):
         self.switches = {
-            "s1": {"name": "Core Switch", "ip": "10.0.0.254", "ports": 6, "status": "online"},
-            "s2": {"name": "Access Switch", "ip": "10.0.1.254", "ports": 5, "status": "online"},
+            "s1": {"name": "Core Switch", "ip": "10.255.0.1", "ports": 6, "status": "online"},
+            "s2": {"name": "User Access 1", "ip": "10.0.1.254", "ports": 3, "status": "online"},
+            "s3": {"name": "User Access 2", "ip": "10.0.1.253", "ports": 3, "status": "online"},
+            "s4": {"name": "User Access 3", "ip": "10.0.1.252", "ports": 3, "status": "online"},
+            "s5": {"name": "Server Switch", "ip": "10.0.2.254", "ports": 3, "status": "online"},
+            "s6": {"name": "DMZ Switch", "ip": "172.16.0.254", "ports": 2, "status": "online"},
+            "s7": {"name": "Edge Switch", "ip": "192.168.100.254", "ports": 6, "status": "online"},
+        }
+        self.routers = {
+            "r1": {
+                "name": "Linux Router",
+                "ip": "10.0.1.1/24",
+                "interfaces": {
+                    "r1-eth0": "10.0.1.1/24",
+                    "r1-eth1": "10.0.2.1/24",
+                    "r1-eth2": "172.16.0.1/24",
+                    "r1-eth3": "192.168.100.1/24",
+                },
+            }
         }
         self.hosts = {
-            "h1": {"name": "Client 1", "ip": "10.0.0.1", "mac": "00:00:00:00:00:01", "role": "user"},
-            "h2": {"name": "Client 2", "ip": "10.0.0.2", "mac": "00:00:00:00:00:02", "role": "user"},
-            "h3": {"name": "Server", "ip": "10.0.0.3", "mac": "00:00:00:00:00:03", "role": "server"},
-            "atk_syn": {"name": "SYN Attacker", "ip": "10.0.0.10", "mac": "00:00:00:00:10:01", "role": "attacker"},
-            "atk_icmp": {"name": "ICMP Attacker", "ip": "10.0.0.11", "mac": "00:00:00:00:10:02", "role": "attacker"},
-            "atk_scan": {"name": "Port Scanner", "ip": "10.0.0.12", "mac": "00:00:00:00:10:03", "role": "attacker"},
-            "atk_arp": {"name": "ARP Spoofer", "ip": "10.0.0.13", "mac": "00:00:00:00:10:04", "role": "attacker"},
-            "atk_dns": {"name": "DNS Attacker", "ip": "10.0.0.14", "mac": "00:00:00:00:10:05", "role": "attacker"},
-            "atk_brute": {"name": "Brute Forcer", "ip": "10.0.0.15", "mac": "00:00:00:00:10:06", "role": "attacker"},
+            "user1": {"name": "User 1", "ip": "10.0.1.10", "mac": "00:00:00:00:00:01", "role": "user", "connected_to": "s2"},
+            "user2": {"name": "User 2", "ip": "10.0.1.11", "mac": "00:00:00:00:00:02", "role": "user", "connected_to": "s2"},
+            "user3": {"name": "User 3", "ip": "10.0.1.12", "mac": "00:00:00:00:00:03", "role": "user", "connected_to": "s3"},
+            "user4": {"name": "User 4", "ip": "10.0.1.13", "mac": "00:00:00:00:00:04", "role": "user", "connected_to": "s3"},
+            "user5": {"name": "User 5", "ip": "10.0.1.14", "mac": "00:00:00:00:00:05", "role": "user", "connected_to": "s4"},
+            "user6": {"name": "User 6", "ip": "10.0.1.15", "mac": "00:00:00:00:00:06", "role": "user", "connected_to": "s4"},
+            "mail_srv": {"name": "Mail Server", "ip": "10.0.2.10", "mac": "00:00:00:00:00:10", "role": "server", "connected_to": "s5"},
+            "file_srv": {"name": "File Server", "ip": "10.0.2.20", "mac": "00:00:00:00:00:11", "role": "server", "connected_to": "s5"},
+            "web_srv": {"name": "Web Server", "ip": "172.16.0.10", "mac": "00:00:00:00:00:12", "role": "server", "connected_to": "s6"},
+            "attacker": {"name": "External Attacker", "ip": "192.168.100.10", "mac": "00:00:00:00:10:01", "role": "attacker", "connected_to": "s7"},
+            "pub_user": {"name": "Public User", "ip": "192.168.100.20", "mac": "00:00:00:00:10:02", "role": "user", "connected_to": "s7"},
+            "ddos_att": {"name": "DDoS Attacker", "ip": "192.168.100.30", "mac": "00:00:00:00:10:03", "role": "attacker", "connected_to": "s7"},
+            "arp_att": {"name": "ARP Spoofer", "ip": "192.168.100.40", "mac": "00:00:00:00:10:04", "role": "attacker", "connected_to": "s7"},
+            "scan_att": {"name": "Scanner", "ip": "192.168.100.50", "mac": "00:00:00:00:10:05", "role": "attacker", "connected_to": "s7"},
         }
         self.links = [
-            {"src": "h1", "dst": "s1"},
-            {"src": "h2", "dst": "s1"},
-            {"src": "h3", "dst": "s2"},
-            {"src": "atk_syn", "dst": "s11"},
-            {"src": "atk_icmp", "dst": "s11"},
-            {"src": "atk_scan", "dst": "s11"},
-            {"src": "atk_arp", "dst": "s11"},
-            {"src": "atk_dns", "dst": "s11"},
-            {"src": "atk_brute", "dst": "s11"},
             {"src": "s1", "dst": "s2"},
+            {"src": "s1", "dst": "s3"},
+            {"src": "s1", "dst": "s4"},
+            {"src": "s1", "dst": "s5"},
+            {"src": "s1", "dst": "s6"},
+            {"src": "s1", "dst": "s7"},
+            {"src": "r1", "dst": "s2"},
+            {"src": "r1", "dst": "s5"},
+            {"src": "r1", "dst": "s6"},
+            {"src": "r1", "dst": "s7"},
+            {"src": "user1", "dst": "s2"},
+            {"src": "user2", "dst": "s2"},
+            {"src": "user3", "dst": "s3"},
+            {"src": "user4", "dst": "s3"},
+            {"src": "user5", "dst": "s4"},
+            {"src": "user6", "dst": "s4"},
+            {"src": "mail_srv", "dst": "s5"},
+            {"src": "file_srv", "dst": "s5"},
+            {"src": "web_srv", "dst": "s6"},
+            {"src": "attacker", "dst": "s7"},
+            {"src": "pub_user", "dst": "s7"},
+            {"src": "ddos_att", "dst": "s7"},
+            {"src": "arp_att", "dst": "s7"},
+            {"src": "scan_att", "dst": "s7"},
         ]
         self.flows = []
         self.alerts = []
@@ -56,10 +92,38 @@ class NetworkState:
             {"id": "R4", "name": "Detect unusual bandwidth spikes", "status": "Enabled", "hits": 0},
         ]
         self.request_log = []
+        self.http_requests = []
         self.flow_counter = 0
         self.alert_counter = 0
         self.ping_counter = 0
         self.lock = threading.Lock()
+
+    def guess_role(self, host_name):
+        name = (host_name or "").lower()
+        if any(token in name for token in ("atk", "attacker", "scan", "scan_att", "att", "mal", "evil")):
+            return "attacker"
+        if any(token in name for token in ("srv", "server", "svc", "db")):
+            return "server"
+        return "user"
+
+    def ensure_host(self, host_name, ip=None, mac=None, role=None):
+        if not host_name:
+            return
+        if host_name not in self.hosts:
+            self.hosts[host_name] = {
+                "name": host_name,
+                "ip": ip or "",
+                "mac": mac or "00:00:00:00:00:00",
+                "role": role or self.guess_role(host_name),
+            }
+            return
+        host = self.hosts[host_name]
+        if ip:
+            host["ip"] = ip
+        if mac:
+            host["mac"] = mac
+        if role:
+            host["role"] = role
 
     def host_names(self):
         return list(self.hosts.keys())
@@ -72,7 +136,7 @@ class NetworkState:
                 "name": host_name,
                 "ip": "",
                 "mac": "00:00:00:00:00:00",
-                "role": "user",
+                "role": self.guess_role(host_name),
             }
         return {
             "host": host_name,
@@ -86,6 +150,23 @@ class NetworkState:
 net = NetworkState()
 
 
+@app.before_request
+def record_http_request():
+    try:
+        entry = {
+            "ts": now_iso(),
+            "method": request.method,
+            "path": request.path,
+            "remote_addr": request.remote_addr,
+            "content_type": request.content_type,
+        }
+        with net.lock:
+            net.http_requests.append(entry)
+            net.http_requests = net.http_requests[-200:]
+    except Exception:
+        pass
+
+
 def increment_rule_hit(rule_id):
     for rule in net.ids_rules:
         if rule["id"] == rule_id:
@@ -93,7 +174,7 @@ def increment_rule_hit(rule_id):
             return
 
 
-def create_alert(source, destination, alert_type, severity, reason):
+def create_alert(source, destination, alert_type, severity, reason, context=None):
     net.alert_counter += 1
     timestamp = now_iso()
     alert = {
@@ -108,97 +189,142 @@ def create_alert(source, destination, alert_type, severity, reason):
         "status": "new",
         "reason": reason,
     }
+    if context:
+        if context.get("flow_id"):
+            alert["flow_id"] = context.get("flow_id")
+        if context.get("protocol"):
+            alert["protocol"] = context.get("protocol")
+        if context.get("command"):
+            alert["command"] = context.get("command")
     net.alerts.append(alert)
-    if source["ip"] not in net.blocked_ips:
+    if source.get("ip") and source["ip"] not in net.blocked_ips:
         net.blocked_ips.append(source["ip"])
     return alert
 
 
 def record_ping_event(flow, alerts, source_host, destination_host, origin="mininet"):
-    net.ping_counter += 1
-    output = flow.get("output") or (
-        f"64 bytes from {flow.get('dst_ip', '')}: icmp_seq=1 ttl=64 "
-        f"time={flow.get('latency_ms', 0)} ms"
-    )
-    latency_ms = flow.get("latency_ms", 0) or 0
-    ping_event = {
-        "id": f"PING-{net.ping_counter:04d}",
-        "flow_id": flow["id"],
-        "src_host": flow["src_host"],
-        "src_ip": flow["src_ip"],
-        "src_mac": flow["src_mac"],
-        "dst_host": flow["dst_host"],
-        "dst_ip": flow["dst_ip"],
-        "dst_mac": flow["dst_mac"],
-        "protocol": flow["protocol"],
-        "bytes": flow["bytes"],
-        "packets": flow["packets"],
-        "packets_transmitted": flow.get("packets_transmitted") or flow["packets"],
-        "packets_received": flow.get("packets_received") or flow["packets"],
-        "packet_loss_pct": flow.get("packet_loss_pct"),
-        "packet_loss": flow.get("packet_loss"),
-        "latency_ms": flow["latency_ms"],
-        "round_trip_time": flow.get("round_trip_time") or f"{latency_ms} ms",
-        "bandwidth_mbps": flow.get("bandwidth_mbps"),
-        "status": flow["status"],
-        "timestamp": flow["timestamp"],
-        "command": flow["command"],
-        "output": output,
-        "activity_type": "ping",
-        "origin": origin,
-        "attack_detected": any(
-            (alert.get("severity") or "").lower() in ("critical", "high") or "attack" in (alert.get("type") or "").lower()
-            for alert in alerts
-        ),
-        "generated_alerts": alerts,
-        "src": source_host,
-        "dst": destination_host,
-    }
-    net.ping_events.append(ping_event)
-    net.ping_events = net.ping_events[-200:]
-    return ping_event
-
-
-def ingest_ping_event(payload):
     with net.lock:
         net.ping_counter += 1
-        latency_ms = payload.get("latency_ms") or 0
+        output = flow.get("output") or (
+            f"64 bytes from {flow.get('dst_ip', '')}: icmp_seq=1 ttl=64 "
+            f"time={flow.get('latency_ms', 0)} ms"
+        )
+        latency_ms = flow.get("latency_ms", 0) or 0
         ping_event = {
-            "id": payload.get("id") or f"PING-{net.ping_counter:04d}",
-            "flow_id": payload.get("flow_id") or payload.get("id") or f"FLOW-{net.flow_counter:04d}",
-            "src_host": payload.get("src_host") or payload.get("src") or "",
-            "src_ip": payload.get("src_ip") or "",
-            "src_mac": payload.get("src_mac") or "",
-            "dst_host": payload.get("dst_host") or payload.get("dst") or "",
-            "dst_ip": payload.get("dst_ip") or "",
-            "dst_mac": payload.get("dst_mac") or "",
-            "protocol": payload.get("protocol") or "ICMP",
-            "bytes": payload.get("bytes") or 64,
-            "packets": payload.get("packets") or 1,
-            "packets_transmitted": payload.get("packets_transmitted") or payload.get("packets") or 1,
-            "packets_received": payload.get("packets_received") or payload.get("packets") or 1,
-            "packet_loss_pct": payload.get("packet_loss_pct"),
-            "packet_loss": payload.get("packet_loss"),
-            "latency_ms": payload.get("latency_ms") or 0,
-            "round_trip_time": payload.get("round_trip_time") or (f"{latency_ms} ms" if latency_ms is not None else None),
-            "bandwidth_mbps": payload.get("bandwidth_mbps"),
-            "status": payload.get("status") or "success",
-            "timestamp": payload.get("timestamp") or now_iso(),
-            "command": payload.get("command") or "ping",
-            "output": payload.get("output") or (
-                f"64 bytes from {payload.get('dst_ip', '')}: icmp_seq=1 ttl=64 "
-                f"time={payload.get('latency_ms', 0)} ms"
-            ),
+            "id": f"PING-{net.ping_counter:04d}",
+            "flow_id": flow["id"],
+            "src_host": flow["src_host"],
+            "src_ip": flow["src_ip"],
+            "src_mac": flow["src_mac"],
+            "dst_host": flow["dst_host"],
+            "dst_ip": flow["dst_ip"],
+            "dst_mac": flow["dst_mac"],
+            "protocol": flow["protocol"],
+            "bytes": flow["bytes"],
+            "packets": flow["packets"],
+            "packets_transmitted": flow.get("packets_transmitted") or flow["packets"],
+            "packets_received": flow.get("packets_received") or flow["packets"],
+            "packet_loss_pct": flow.get("packet_loss_pct"),
+            "packet_loss": flow.get("packet_loss"),
+            "latency_ms": flow["latency_ms"],
+            "round_trip_time": flow.get("round_trip_time") or f"{latency_ms} ms",
+            "bandwidth_mbps": flow.get("bandwidth_mbps"),
+            "status": flow["status"],
+            "timestamp": flow["timestamp"],
+            "command": flow["command"],
+            "output": output,
             "activity_type": "ping",
-            "origin": payload.get("origin") or "terminal",
-            "attack_detected": bool(payload.get("attack_detected")),
-            "generated_alerts": payload.get("generated_alerts") or [],
-            "src": payload.get("src") or payload.get("src_host") or "",
-            "dst": payload.get("dst") or payload.get("dst_host") or "",
+            "origin": origin,
+            "attack_detected": any(
+                (alert.get("severity") or "").lower() in ("critical", "high") or "attack" in (alert.get("type") or "").lower()
+                for alert in alerts
+            ),
+            "generated_alerts": alerts,
+            "src": source_host,
+            "dst": destination_host,
         }
         net.ping_events.append(ping_event)
         net.ping_events = net.ping_events[-200:]
         return ping_event
+
+
+def ingest_ping_event(payload):
+    # Backwards-compatible: accept terminal ping payload and convert it into a real flow + IDS alerts.
+    src = payload.get("src_host") or payload.get("src") or ""
+    dst = payload.get("dst_host") or payload.get("dst") or ""
+
+    if not src or not dst:
+        with net.lock:
+            net.ping_counter += 1
+            latency_ms = payload.get("latency_ms") or 0
+            ping_event = {
+                "id": payload.get("id") or f"PING-{net.ping_counter:04d}",
+                "flow_id": payload.get("flow_id") or payload.get("id") or f"FLOW-{net.flow_counter:04d}",
+                "src_host": src,
+                "src_ip": payload.get("src_ip") or "",
+                "src_mac": payload.get("src_mac") or "",
+                "dst_host": dst,
+                "dst_ip": payload.get("dst_ip") or "",
+                "dst_mac": payload.get("dst_mac") or "",
+                "protocol": payload.get("protocol") or "ICMP",
+                "bytes": payload.get("bytes") or 64,
+                "packets": payload.get("packets") or 1,
+                "packets_transmitted": payload.get("packets_transmitted") or payload.get("packets") or 1,
+                "packets_received": payload.get("packets_received") or payload.get("packets") or 1,
+                "packet_loss_pct": payload.get("packet_loss_pct"),
+                "packet_loss": payload.get("packet_loss"),
+                "latency_ms": payload.get("latency_ms") or 0,
+                "round_trip_time": payload.get("round_trip_time") or (f"{latency_ms} ms" if latency_ms is not None else None),
+                "bandwidth_mbps": payload.get("bandwidth_mbps"),
+                "status": payload.get("status") or "success",
+                "timestamp": payload.get("timestamp") or now_iso(),
+                "command": payload.get("command") or "ping",
+                "output": payload.get("output") or (
+                    f"64 bytes from {payload.get('dst_ip', '')}: icmp_seq=1 ttl=64 "
+                    f"time={payload.get('latency_ms', 0)} ms"
+                ),
+                "activity_type": "ping",
+                "origin": payload.get("origin") or "terminal",
+                "attack_detected": bool(payload.get("attack_detected")),
+                "generated_alerts": payload.get("generated_alerts") or [],
+                "src": payload.get("src") or payload.get("src_host") or "",
+                "dst": payload.get("dst") or payload.get("dst_host") or "",
+            }
+            net.ping_events.append(ping_event)
+            net.ping_events = net.ping_events[-200:]
+            return ping_event
+
+    with net.lock:
+        net.ensure_host(src, ip=payload.get("src_ip"), mac=payload.get("src_mac"), role=payload.get("src_role"))
+        net.ensure_host(dst, ip=payload.get("dst_ip"), mac=payload.get("dst_mac"), role=payload.get("dst_role"))
+
+    latency = float(payload.get("latency_ms") or 0)
+    packets = int(payload.get("packets") or payload.get("packets_transmitted") or 1)
+    bytes_count = int(payload.get("bytes") or 64)
+    command = payload.get("command") or f"ping -c 1 {dst}"
+    origin = payload.get("origin") or "terminal"
+
+    flow, alerts = register_request(src, dst, "ICMP", bytes_count, packets, latency, 0.0, command=command, activity_type="ping")
+    if payload.get("output"):
+        flow["output"] = payload["output"]
+    if payload.get("packets_transmitted") is not None:
+        flow["packets_transmitted"] = payload.get("packets_transmitted")
+    if payload.get("packets_received") is not None:
+        flow["packets_received"] = payload.get("packets_received")
+    if payload.get("packet_loss_pct") is not None:
+        flow["packet_loss_pct"] = payload.get("packet_loss_pct")
+    if payload.get("packet_loss") is not None:
+        flow["packet_loss"] = payload.get("packet_loss")
+    ping_event = record_ping_event(flow, alerts, src, dst, origin=origin)
+    if payload.get("output"):
+        ping_event["output"] = payload.get("output")
+    if payload.get("status"):
+        ping_event["status"] = payload.get("status")
+    if payload.get("round_trip_time"):
+        ping_event["round_trip_time"] = payload.get("round_trip_time")
+    if payload.get("timestamp"):
+        ping_event["timestamp"] = payload.get("timestamp")
+    return ping_event
 
 
 def flow_status(source, destination):
@@ -264,27 +390,28 @@ def register_request(
         ]
 
         generated_alerts = []
+        context = {"flow_id": flow["id"], "protocol": protocol, "command": flow.get("command")}
         if source["role"] == "attacker":
             generated_alerts.append(
-                create_alert(source, destination, f"{protocol} attacker traffic", "Critical", "Traffic originated from attacker host")
+                create_alert(source, destination, f"{protocol} attacker traffic", "Critical", "Traffic originated from attacker host", context=context)
             )
             increment_rule_hit("R3")
 
         if protocol == "ICMP" and len(recent_same_requests) >= 3:
             generated_alerts.append(
-                create_alert(source, destination, "ICMP flood suspected", "High", "Repeated ping requests detected in a short interval")
+                create_alert(source, destination, "ICMP flood suspected", "High", "Repeated ping requests detected in a short interval", context=context)
             )
             increment_rule_hit("R1")
 
-        if protocol == "TCP" and bytes_count >= 800000:
+        if protocol == "TCP" and bytes_count >= 80000:
             generated_alerts.append(
-                create_alert(source, destination, "Bandwidth spike detected", "Medium", "Large TCP transfer observed in Mininet")
+                create_alert(source, destination, "Bandwidth spike detected", "Medium", "Large TCP transfer observed in Mininet", context=context)
             )
             increment_rule_hit("R4")
 
         if source["host"] == "atk_syn":
             generated_alerts.append(
-                create_alert(source, destination, "SYN flood suspected", "Critical", "SYN attacker host generated a request")
+                create_alert(source, destination, "SYN flood suspected", "Critical", "SYN attacker host generated a request", context=context)
             )
             increment_rule_hit("R2")
 
@@ -335,13 +462,19 @@ def ping_stats():
 def topology_payload():
     return {
         "switches": net.switches,
+        "routers": net.routers,
         "hosts": net.hosts,
         "links": net.links,
     }
 
 
 def background_traffic():
-    normal_pairs = [("h1", "h3"), ("h2", "h3"), ("h1", "h2")]
+    normal_pairs = [
+        ("user1", "mail_srv"),
+        ("user2", "file_srv"),
+        ("user3", "user4"),
+        ("pub_user", "web_srv"),
+    ]
     while True:
         src, dst = random.choice(normal_pairs)
         protocol = random.choice(["TCP", "UDP"])
@@ -445,7 +578,7 @@ def mininet_ping(src, dst):
         "dst_ip": flow["dst_ip"],
         "src_mac": flow["src_mac"],
         "dst_mac": flow["dst_mac"],
-        "is_attacker": net.hosts[src]["role"] == "attacker" or net.hosts[dst]["role"] == "attacker",
+        "is_attacker": (net.hosts.get(src, {}).get("role") == "attacker") or (net.hosts.get(dst, {}).get("role") == "attacker"),
         "time_sent": flow["timestamp"],
         "round_trip_time": f"{flow['latency_ms']} ms",
         "output": f"64 bytes from {flow['dst_ip']}: icmp_seq=1 ttl=64 time={flow['latency_ms']} ms",
@@ -667,8 +800,19 @@ def traffic_bandwidth_trends():
     ])
 
 
-@app.route("/api/pings")
+@app.route("/api/pings", methods=["GET", "DELETE"])
 def pings():
+    if request.method == "DELETE":
+        include_flows = (request.args.get("include_flows") or "true").lower() in ("1", "true", "yes")
+        with net.lock:
+            flow_ids = [p.get("flow_id") for p in net.ping_events if p.get("flow_id")]
+            cleared_pings = len(net.ping_events)
+            net.ping_events = []
+            if include_flows and flow_ids:
+                flow_id_set = set(flow_ids)
+                net.flows = [flow for flow in net.flows if flow.get("id") not in flow_id_set]
+        return jsonify({"status": "cleared", "cleared_pings": cleared_pings, "cleared_flows": len(set(flow_ids))})
+
     limit = int(request.args.get("limit", 50))
     src = request.args.get("src")
     dst = request.args.get("dst")
@@ -689,8 +833,35 @@ def pings():
 @app.route("/api/pings/ingest", methods=["POST"])
 def ingest_ping():
     payload = request.get_json() or {}
+    try:
+        print(f"[ingest] /api/pings/ingest keys={sorted(list(payload.keys()))}")
+    except Exception:
+        pass
     ping_event = ingest_ping_event(payload)
     return jsonify(ping_event), 201
+
+
+@app.route("/api/ping", methods=["POST"])
+def ingest_ping_legacy():
+    """
+    Legacy convenience endpoint.
+    Accepts the same payload as /api/pings/ingest and forwards it.
+    """
+    payload = request.get_json() or {}
+    payload.setdefault("origin", "legacy:/api/ping")
+    try:
+        print(f"[ingest] /api/ping keys={sorted(list(payload.keys()))}")
+    except Exception:
+        pass
+    ping_event = ingest_ping_event(payload)
+    return jsonify(ping_event), 201
+
+
+@app.route("/api/debug/http")
+def debug_http_requests():
+    limit = int(request.args.get("limit", 50))
+    with net.lock:
+        return jsonify(list(reversed(net.http_requests))[:limit])
 
 
 @app.route("/api/pings/latest")
@@ -716,8 +887,14 @@ def traffic_port_stats():
     return jsonify(stats)
 
 
-@app.route("/api/ids/alerts")
+@app.route("/api/ids/alerts", methods=["GET", "DELETE"])
 def ids_alerts():
+    if request.method == "DELETE":
+        with net.lock:
+            cleared = len(net.alerts)
+            net.alerts = []
+        return jsonify({"status": "cleared", "cleared_alerts": cleared})
+
     limit = int(request.args.get("limit", 50))
     severity = request.args.get("severity")
     alerts = list(reversed(net.alerts))
@@ -762,6 +939,27 @@ def resolve_alert(alert_id):
     for alert in net.alerts:
         if alert["id"] == alert_id:
             alert["status"] = "resolved"
+            return jsonify(alert)
+    return jsonify({"error": "Alert not found"}), 404
+
+
+@app.route("/api/ids/alerts/<alert_id>/block", methods=["PUT"])
+def block_alert(alert_id):
+    for alert in net.alerts:
+        if alert["id"] == alert_id:
+            alert["status"] = "blocked"
+            src_ip = alert.get("source_ip")
+            if src_ip and src_ip not in net.blocked_ips:
+                net.blocked_ips.append(src_ip)
+            return jsonify(alert)
+    return jsonify({"error": "Alert not found"}), 404
+
+
+@app.route("/api/ids/alerts/<alert_id>/clear", methods=["PUT"])
+def clear_alert(alert_id):
+    for alert in net.alerts:
+        if alert["id"] == alert_id:
+            alert["status"] = "cleared"
             return jsonify(alert)
     return jsonify({"error": "Alert not found"}), 404
 

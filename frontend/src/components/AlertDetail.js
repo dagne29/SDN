@@ -7,22 +7,37 @@ export default function AlertDetail() {
   const navigate = useNavigate();
   const [alert, setAlert] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const load = async () => {
+    const res = await idsAPI.getAlerts(200);
+    const match = (res.data || []).find((item) => item?.id === alertId) || null;
+    setAlert(match);
+  };
 
   useEffect(() => {
-    const load = async () => {
+    const run = async () => {
       try {
-        const res = await idsAPI.getAlerts(200);
-        const match = (res.data || []).find((item) => item?.id === alertId) || null;
-        setAlert(match);
+        await load();
       } catch (error) {
         console.error('Error loading alert detail:', error);
       } finally {
         setLoading(false);
       }
     };
-
-    load();
+    run();
   }, [alertId]);
+
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    try {
+      await load();
+    } catch (error) {
+      console.error('Error loading alert detail:', error);
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   if (loading) return <div className="p-5 text-center">Loading alert details...</div>;
 
@@ -44,7 +59,12 @@ export default function AlertDetail() {
           <h2 className="mb-1">Alert Detail</h2>
           <p className="text-muted mb-0">{alert.id}</p>
         </div>
-        <button className="btn btn-outline-secondary" onClick={() => navigate(-1)}>Back</button>
+        <div className="d-flex gap-2">
+          <button type="button" className="btn btn-outline-secondary" onClick={handleRefresh} disabled={refreshing}>
+            <i className="bi bi-arrow-clockwise me-1" /> Refresh
+          </button>
+          <button type="button" className="btn btn-outline-secondary" onClick={() => navigate(-1)}>Back</button>
+        </div>
       </div>
 
       <div className="card">

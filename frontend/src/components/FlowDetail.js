@@ -7,22 +7,37 @@ export default function FlowDetail() {
   const navigate = useNavigate();
   const [flow, setFlow] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const load = async () => {
+    const res = await controllerAPI.getFlows();
+    const match = (res.data || []).find((item) => item?.id === flowId) || null;
+    setFlow(match);
+  };
 
   useEffect(() => {
-    const load = async () => {
+    const run = async () => {
       try {
-        const res = await controllerAPI.getFlows();
-        const match = (res.data || []).find((item) => item?.id === flowId) || null;
-        setFlow(match);
+        await load();
       } catch (error) {
         console.error('Error loading flow detail:', error);
       } finally {
         setLoading(false);
       }
     };
-
-    load();
+    run();
   }, [flowId]);
+
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    try {
+      await load();
+    } catch (error) {
+      console.error('Error loading flow detail:', error);
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   if (loading) return <div className="p-5 text-center">Loading flow details...</div>;
 
@@ -44,7 +59,12 @@ export default function FlowDetail() {
           <h2 className="mb-1">Flow Detail</h2>
           <p className="text-muted mb-0">{flow.id}</p>
         </div>
-        <button className="btn btn-outline-secondary" onClick={() => navigate(-1)}>Back</button>
+        <div className="d-flex gap-2">
+          <button type="button" className="btn btn-outline-secondary" onClick={handleRefresh} disabled={refreshing}>
+            <i className="bi bi-arrow-clockwise me-1" /> Refresh
+          </button>
+          <button type="button" className="btn btn-outline-secondary" onClick={() => navigate(-1)}>Back</button>
+        </div>
       </div>
 
       <div className="card">

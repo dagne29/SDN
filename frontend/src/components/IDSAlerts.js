@@ -1,16 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { useLocation } from 'react-router-dom';
 import { idsAPI, pingAPI } from '../services/api';
-
-const sections = [
-  { key: 'overview', label: 'Overview' },
-  { key: 'list', label: 'Alert List' },
-  { key: 'details', label: 'Alert Details' },
-  { key: 'severity', label: 'Severity Levels' },
-  { key: 'status', label: 'Status' },
-  { key: 'actions', label: 'Actions' },
-  { key: 'filters', label: 'Filters' },
-  { key: 'history', label: 'History' },
-];
 
 const severityOptions = ['all', 'Critical', 'High', 'Medium', 'Low'];
 const statusOptions = ['all', 'new', 'acknowledged', 'blocked', 'resolved'];
@@ -37,13 +27,37 @@ function StatusBadge({ status }) {
   return <span className={`badge bg-${color}`}>{status || 'new'}</span>;
 }
 
+function PingStatusBadge({ status }) {
+  const normalized = (status || 'unknown').toLowerCase();
+  const color = {
+    success: 'success',
+    failed: 'danger',
+    degraded: 'warning text-dark',
+    unknown: 'secondary',
+  }[normalized] || 'secondary';
+  return <span className={`badge bg-${color}`}>{normalized}</span>;
+}
+
+function summarizePingOutput(output) {
+  const text = (output || '').trim();
+  if (!text) return '';
+  const lines = text.split('\n').map((line) => line.trim()).filter(Boolean);
+  const interesting = lines.find((line) => /Destination Host Unreachable/i.test(line))
+    || lines.find((line) => /packet loss/i.test(line))
+    || lines[lines.length - 1];
+  return interesting || '';
+}
+
 export default function IDSAlerts() {
+  const location = useLocation();
   const [alerts, setAlerts] = useState([]);
   const [stats, setStats] = useState(null);
   const [rules, setRules] = useState([]);
+  const [recentPings, setRecentPings] = useState([]);
   const [attackPings, setAttackPings] = useState([]);
+  const [latestPing, setLatestPing] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [activeSection, setActiveSection] = useState('overview');
+  const [refreshing, setRefreshing] = useState(false);
   const [selectedAlertId, setSelectedAlertId] = useState(null);
   const [severityFilter, setSeverityFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
@@ -57,23 +71,49 @@ export default function IDSAlerts() {
   }, []);
 
   const fetchAlertsData = async () => {
+    let nextAlerts = [];
     try {
       const [alertsRes, statsRes, rulesRes] = await Promise.all([
         idsAPI.getAlerts(100),
         idsAPI.getStatistics(),
         idsAPI.getRules(),
       ]);
-      const pingsRes = await pingAPI.getAll({ limit: 100, attackOnly: true });
-
-      const nextAlerts = alertsRes.data || [];
+      nextAlerts = alertsRes.data || [];
       setAlerts(nextAlerts);
       setStats(statsRes.data || null);
       setRules(rulesRes.data || []);
-      setAttackPings(pingsRes.data || []);
       setSelectedAlertId((current) => current || nextAlerts[0]?.id || null);
-      setLoading(false);
     } catch (error) {
-      console.error('Error fetching alerts:', error);
+      console.error('Error fetching IDS data:', error);
+      setActionMessage('Unable to load IDS data. Is the backend running on port 5000?');
+    }
+
+    try {
+      const [pingsRes, latestPingRes] = await Promise.all([
+        pingAPI.getAll({ limit: 100 }),
+        pingAPI.getLatest(),
+      ]);
+      const nextPings = pingsRes.data || [];
+      setRecentPings(nextPings);
+      setAttackPings(nextPings.filter((ping) => Boolean(ping?.attack_detected)));
+      setLatestPing(latestPingRes.data || null);
+    } catch (error) {
+      console.error('Error fetching ping events:', error);
+      setRecentPings([]);
+      setAttackPings([]);
+      setLatestPing(null);
+      setActionMessage('Unable to load ping events. Check `/api/pings` and `/api/pings/ingest` on the backend.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    try {
+      await fetchAlertsData();
+    } finally {
+      setRefreshing(false);
     }
   };
 
@@ -122,12 +162,19 @@ export default function IDSAlerts() {
       setActionMessage(`Unable to ${action} alert ${alertId}.`);
     }
   };
+  
 
   const historyItems = filteredAlerts.slice().reverse().slice(0, historyLimit);
   const activeCount = counts.status.new || 0;
   const blockedCount = counts.status.blocked || 0;
   const resolvedCount = counts.status.resolved || 0;
   const criticalCount = counts.severity.Critical || 0;
+  const activeSection = useMemo(() => {
+    const params = new URLSearchParams(location.search);
+    const value = params.get('section') || 'overview';
+    const allowed = new Set(['overview', 'list', 'details', 'severity', 'status', 'actions', 'filters', 'history']);
+    return allowed.has(value) ? value : 'overview';
+  }, [location.search]);
 
   if (loading) return <div className="p-5 text-center">Loading alerts...</div>;
 
@@ -138,22 +185,14 @@ export default function IDSAlerts() {
           <h2 className="mb-1">IDS Alerts</h2>
           <p className="text-muted mb-0">Controller-style alert management for attack info, details, severity, status, actions, filters, and history.</p>
         </div>
-        <div className="text-muted small">
-          {alerts.length} alerts total, {stats?.blocked_sources || 0} blocked sources, {stats?.detection_rate || '0%'} detection rate
-        </div>
-      </div>
-
-      <div className="d-flex flex-wrap gap-2 mb-4">
-        {sections.map((section) => (
-          <button
-            key={section.key}
-            type="button"
-            className={`btn btn-sm ${activeSection === section.key ? 'btn-danger' : 'btn-outline-danger'}`}
-            onClick={() => setActiveSection(section.key)}
-          >
-            {section.label}
+        <div className="d-flex align-items-center gap-2">
+          <div className="text-muted small">
+            {alerts.length} alerts total, {stats?.blocked_sources || 0} blocked sources, {stats?.detection_rate || '0%'} detection rate
+          </div>
+          <button type="button" className="btn btn-sm btn-outline-secondary" onClick={handleRefresh} disabled={refreshing}>
+            <i className="bi bi-arrow-clockwise me-1" /> Refresh
           </button>
-        ))}
+        </div>
       </div>
 
       <div className="row g-4 mb-4">
@@ -196,6 +235,11 @@ export default function IDSAlerts() {
       </div>
 
       {actionMessage ? <div className="alert alert-info py-2">{actionMessage}</div> : null}
+      {!actionMessage && !latestPing && !recentPings.length ? (
+        <div className="alert alert-warning py-2">
+          No ping events received yet. If you ran pings in Mininet, confirm the Flask API is reachable at <code>http://localhost:5000/api/health</code>.
+        </div>
+      ) : null}
 
       {activeSection === 'overview' ? (
         <div className="row g-4">
@@ -207,6 +251,7 @@ export default function IDSAlerts() {
                 <div className="d-flex justify-content-between border-bottom py-2"><span>Acknowledged</span><span>{counts.status.acknowledged || 0}</span></div>
                 <div className="d-flex justify-content-between border-bottom py-2"><span>Blocked</span><span>{counts.status.blocked || 0}</span></div>
                 <div className="d-flex justify-content-between pt-2"><span>Resolved</span><span>{counts.status.resolved || 0}</span></div>
+                <div className="d-flex justify-content-between pt-2"><span>Recent Pings</span><span>{recentPings.length}</span></div>
                 <div className="d-flex justify-content-between pt-2"><span>Attack Pings</span><span>{attackPings.length}</span></div>
               </div>
             </div>
@@ -229,6 +274,35 @@ export default function IDSAlerts() {
                 ) : (
                   <p className="text-muted mb-0">No alerts available.</p>
                 )}
+              </div>
+            </div>
+          </div>
+          <div className="col-12">
+            <div className="card shadow-sm">
+              <div className="card-header bg-primary text-white"><strong>Latest Ping Request</strong></div>
+              <div className="card-body">
+                {latestPing && (latestPing.src_host || latestPing.src || latestPing.dst_host || latestPing.dst) ? (
+                  <div className="d-flex flex-column flex-md-row justify-content-between gap-2">
+                    <div>
+                      <div className="fw-semibold">
+                        {latestPing.src_host || latestPing.src || '—'} → {latestPing.dst_host || latestPing.dst || '—'}
+                      </div>
+                      <div className="small text-muted">
+                        {latestPing.status || 'unknown'} • {latestPing.round_trip_time || (latestPing.latency_ms != null ? `${latestPing.latency_ms} ms` : '—')} • {latestPing.timestamp || '—'}
+                      </div>
+                    </div>
+                    <div className="text-muted small">
+                      <code>{latestPing.command || 'ping'}</code>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-muted">No ping requests yet.</div>
+                )}
+                {!latestPing && !recentPings.length ? (
+                  <div className="mt-2 small text-muted">
+                    Mininet ping events show up here only after the Flask API is running on <code>http://localhost:5000</code>.
+                  </div>
+                ) : null}
               </div>
             </div>
           </div>
@@ -502,7 +576,8 @@ export default function IDSAlerts() {
                         </tr>
                       )) : (
                         <tr>
-                          <td colSpan="5" className="text-center text-muted py-3">No alerts for this filter</td>
+                          <td colSpan="5" classNa
+                          me="text-center text-muted py-3">No alerts for this filter</td>
                         </tr>
                       )}
                     </tbody>
@@ -581,14 +656,24 @@ export default function IDSAlerts() {
                   </table>
                 </div>
                 <div className="p-3 border-top">
-                  <div className="fw-semibold mb-2">Attack Ping Feed</div>
-                  {attackPings.slice().reverse().slice(0, 8).map((ping) => (
+                  <div className="fw-semibold mb-2">Ping Feed</div>
+                  {recentPings.slice().reverse().slice(0, 8).map((ping) => (
                     <div key={ping.id} className="border-bottom py-2">
-                      <div className="small fw-semibold">{ping.src_host} → {ping.dst_host}</div>
+                      <div className="d-flex justify-content-between align-items-center gap-2">
+                        <div className="small fw-semibold">{ping.src_host} → {ping.dst_host}</div>
+                        <PingStatusBadge status={ping.status} />
+                      </div>
                       <div className="small text-muted">{ping.command}</div>
+                      {ping.attack_detected ? <div className="small text-danger">Attack detected</div> : null}
+                      {ping.packet_loss_pct != null ? (
+                        <div className="small text-muted">Loss: {ping.packet_loss_pct}%</div>
+                      ) : null}
+                      {ping.output ? (
+                        <div className="small text-muted">{summarizePingOutput(ping.output)}</div>
+                      ) : null}
                     </div>
                   ))}
-                  {!attackPings.length ? <div className="text-muted small">No attack pings detected yet.</div> : null}
+                  {!recentPings.length ? <div className="text-muted small">No ping events seen yet.</div> : null}
                 </div>
               </div>
             </div>

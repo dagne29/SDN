@@ -1,32 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { controllerAPI, idsAPI, pingAPI, trafficAPI, topologyAPI } from '../services/api';
-
-const controllerSections = [
-  { key: 'overview', label: 'Overview', path: '/controller' },
-  { key: 'status', label: 'Network Status', path: '/controller/status' },
-  { key: 'switches', label: 'Switch & Host Monitoring', path: '/controller/switches' },
-  { key: 'flows', label: 'Flow Management', path: '/controller/flows' },
-  { key: 'traffic', label: 'Traffic Control', path: '/controller/traffic' },
-  { key: 'ids', label: 'IDS / Security', path: '/controller/ids' },
-  { key: 'logs', label: 'Logs & Performance', path: '/controller/logs' },
-];
-
-function SectionNav({ activeKey }) {
-  return (
-    <div className="d-flex flex-wrap gap-2 mb-4">
-      {controllerSections.map((section) => (
-        <Link
-          key={section.key}
-          to={section.path}
-          className={`btn btn-sm ${activeKey === section.key ? 'btn-dark' : 'btn-outline-dark'}`}
-        >
-          {section.label}
-        </Link>
-      ))}
-    </div>
-  );
-}
 
 function MetricCard({ title, value, detail, accent = 'primary' }) {
   return (
@@ -53,6 +27,7 @@ export default function Controller() {
   const [topologyHosts, setTopologyHosts] = useState({});
   const [pingStats, setPingStats] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
 
   const activeKey = useMemo(() => {
     if (location.pathname.startsWith('/controller/status')) return 'status';
@@ -95,6 +70,15 @@ export default function Controller() {
     }
   };
 
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    try {
+      await fetchAll();
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
   const handleFlowClick = (flow) => {
     navigate(`/flows/${flow.id}`);
   };
@@ -119,12 +103,15 @@ export default function Controller() {
           <h2 className="mb-1">Controller</h2>
           <p className="text-muted mb-0">Overall activity control for status, monitoring, flows, traffic, IDS, logs, and performance.</p>
         </div>
-        <div className="text-muted small">
-          {status?.flow_count || flows.length} flows, {status?.alert_count || alerts.length} alerts, {status?.switches?.length || Object.keys(switches).length} switches
+        <div className="d-flex align-items-center gap-2">
+          <div className="text-muted small">
+            {status?.flow_count || flows.length} flows, {status?.alert_count || alerts.length} alerts, {status?.switches?.length || Object.keys(switches).length} switches
+          </div>
+          <button type="button" className="btn btn-sm btn-outline-secondary" onClick={handleRefresh} disabled={refreshing}>
+            <i className="bi bi-arrow-clockwise me-1" /> Refresh
+          </button>
         </div>
       </div>
-
-      <SectionNav activeKey={activeKey} />
 
       {activeKey === 'overview' ? (
         <>

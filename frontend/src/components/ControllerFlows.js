@@ -6,27 +6,43 @@ export default function ControllerFlows() {
   const [flows, setFlows] = useState([]);
   const [pingEvents, setPingEvents] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const navigate = useNavigate();
 
+  const load = async () => {
+    const [controllerRes, pingRes] = await Promise.all([
+      controllerAPI.getFlows(),
+      pingAPI.getAll({ limit: 100 }),
+    ]);
+    setFlows(controllerRes.data || []);
+    setPingEvents(pingRes.data || []);
+  };
+
   useEffect(() => {
-    const load = async () => {
+    const run = async () => {
       try {
-        const [controllerRes, pingRes] = await Promise.all([
-          controllerAPI.getFlows(),
-          pingAPI.getAll({ limit: 100 }),
-        ]);
-        setFlows(controllerRes.data || []);
-        setPingEvents(pingRes.data || []);
+        await load();
       } catch (err) {
         console.error('Error loading controller flows', err);
       } finally {
         setLoading(false);
       }
     };
-    load();
-    const interval = setInterval(load, 4000);
+    run();
+    const interval = setInterval(run, 4000);
     return () => clearInterval(interval);
   }, []);
+
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    try {
+      await load();
+    } catch (err) {
+      console.error('Error loading controller flows', err);
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   if (loading) return (
     <div className="p-5 text-center">
@@ -37,7 +53,12 @@ export default function ControllerFlows() {
 
   return (
     <div className="container-fluid p-4">
-      <h2 className="mb-4">Controller Ping Flows</h2>
+      <div className="d-flex justify-content-between align-items-center mb-4 gap-2">
+        <h2 className="mb-0">Controller Ping Flows</h2>
+        <button type="button" className="btn btn-sm btn-outline-secondary" onClick={handleRefresh} disabled={refreshing}>
+          <i className="bi bi-arrow-clockwise me-1" /> Refresh
+        </button>
+      </div>
       <p className="text-muted mb-3">
         Showing ping activity from the shared ping store, plus any controller flow records that were tagged as ping.
       </p>
