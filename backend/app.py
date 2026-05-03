@@ -51,9 +51,11 @@ class NetworkState:
             "web_srv": {"name": "Web Server", "ip": "172.16.0.10", "mac": "00:00:00:00:00:12", "role": "server", "connected_to": "s6"},
             "attacker": {"name": "External Attacker", "ip": "192.168.100.10", "mac": "00:00:00:00:10:01", "role": "attacker", "connected_to": "s7"},
             "pub_user": {"name": "Public User", "ip": "192.168.100.20", "mac": "00:00:00:00:10:02", "role": "user", "connected_to": "s7"},
-            "ddos_att": {"name": "DDoS Attacker", "ip": "192.168.100.30", "mac": "00:00:00:00:10:03", "role": "attacker", "connected_to": "s7"},
-            "arp_att": {"name": "ARP Spoofer", "ip": "192.168.100.40", "mac": "00:00:00:00:10:04", "role": "attacker", "connected_to": "s7"},
-            "scan_att": {"name": "Scanner", "ip": "192.168.100.50", "mac": "00:00:00:00:10:05", "role": "attacker", "connected_to": "s7"},
+            "ddos_att": {"name": "DDoS Attacker", "ip": "192.168.100.30", "mac": "00:00:00:00:10:03", "role": "ddos", "connected_to": "s7"},
+            "arp_att": {"name": "ARP Spoofer", "ip": "192.168.100.40", "mac": "00:00:00:00:10:04", "role": "arp", "connected_to": "s7"},
+            "scan_att": {"name": "Scanner", "ip": "192.168.100.50", "mac": "00:00:00:00:10:05", "role": "scan", "connected_to": "s7"},
+            "brute_att": {"name": "Brute Force Attacker", "ip": "192.168.100.60", "mac": "00:00:00:00:10:06", "role": "brute", "connected_to": "s7"},
+            "icmp_att": {"name": "ICMP Attacker", "ip": "192.168.100.70", "mac": "00:00:00:00:10:07", "role": "icmp", "connected_to": "s7"},
         }
         self.links = [
             {"src": "s1", "dst": "s2"},
@@ -80,6 +82,8 @@ class NetworkState:
             {"src": "ddos_att", "dst": "s7"},
             {"src": "arp_att", "dst": "s7"},
             {"src": "scan_att", "dst": "s7"},
+            {"src": "brute_att", "dst": "s7"},
+            {"src": "icmp_att", "dst": "s7"},
         ]
         self.flows = []
         self.alerts = []
@@ -392,6 +396,9 @@ def register_request(
         generated_alerts = []
         context = {"flow_id": flow["id"], "protocol": protocol, "command": flow.get("command")}
         if source["role"] == "attacker":
+            # Automatically block attacker IP
+            if source.get("ip") and source["ip"] not in net.blocked_ips:
+                net.blocked_ips.append(source["ip"])
             generated_alerts.append(
                 create_alert(source, destination, f"{protocol} attacker traffic", "Critical", "Traffic originated from attacker host", context=context)
             )
@@ -410,6 +417,9 @@ def register_request(
             increment_rule_hit("R4")
 
         if source["host"] == "atk_syn":
+            # Automatically block SYN flood attacker IP
+            if source.get("ip") and source["ip"] not in net.blocked_ips:
+                net.blocked_ips.append(source["ip"])
             generated_alerts.append(
                 create_alert(source, destination, "SYN flood suspected", "Critical", "SYN attacker host generated a request", context=context)
             )
@@ -460,11 +470,25 @@ def ping_stats():
 
 
 def topology_payload():
+    # Always include core router r1 prominently
+    routers = dict(net.routers)
+    if "r1" not in routers:
+        routers["r1"] = {
+            "name": "Core Router (r1)",
+            "ip": "10.0.1.1/24",
+            "interfaces": {
+                "r1-eth0": "10.0.1.1/24",
+                "r1-eth1": "10.0.2.1/24",
+                "r1-eth2": "172.16.0.1/24",
+                "r1-eth3": "192.168.100.1/24",
+            },
+        }
     return {
         "switches": net.switches,
-        "routers": net.routers,
+        "routers": routers,
         "hosts": net.hosts,
         "links": net.links,
+        "core_router": routers.get("r1"),
     }
 
 
@@ -518,6 +542,7 @@ def dashboard():
         "recent_traffic": net.flows[-10:],
         "recent_ping_traffic": ping_data["recent_pings"],
         "last_ping_flow": ping_data["latest_ping"],
+        "last_ping": ping_data["latest_ping"],
         "last_ping_result": ping_data["latest_ping"],
         "active_alerts": net.alerts[-5:],
         "system_health": "good" if len(net.alerts) < 3 else "attention",
@@ -531,17 +556,18 @@ def mininet_status():
     for ping in net.ping_events[-200:]:
         src = ping.get("src_host") or ping.get("src")
         dst = ping.get("dst_host") or ping.get("dst")
-        if src:
-            observed_hosts.add(src)
-        if dst:
-            observed_hosts.add(dst)
+        if src: observed_hosts.add(src)
+        if dst: observed_hosts.add(dst)
     hosts = sorted(set(net.host_names()) | observed_hosts)
     return jsonify({
         "topology_running": True,
         "controller_connected": True,
+        "connected": True,          # explicit flag for frontend offline detection
+        "status": "running",        # explicit status string
         "hosts": hosts,
         "switches": list(net.switches.keys()),
         "links": net.links,
+        "core_router": net.routers.get("r1", {"name": "Core Router r1", "ip": "10.0.1.1/24"}),
         "timestamp": now_iso(),
     })
 
@@ -613,6 +639,12 @@ def mininet_traffic(src, dst):
 
 @app.route("/api/controller/status")
 def controller_status():
+    attacker_alerts = [a for a in net.alerts if
+        any(r in (a.get("source_host") or "").lower() for r in ["attacker","ddos","syn","arp","scan","brute","icmp"]) or
+        a.get("severity") == "Critical" or
+        "attack" in (a.get("type") or "").lower() or
+        "flood" in (a.get("type") or "").lower()
+    ]
     return jsonify({
         "controller_connected": True,
         "topology_running": True,
@@ -621,6 +653,12 @@ def controller_status():
         "links": net.links,
         "flow_count": len(net.flows),
         "alert_count": len(net.alerts),
+        "attacker_alert_count": len(attacker_alerts),
+        "blocked_ips": len(net.blocked_ips),
+        "blocked_ip_list": net.blocked_ips,
+        "core_router": net.routers.get("r1", {"name": "Core Router r1", "ip": "10.0.1.1/24"}),
+        "auto_blocking": True,
+        "system_status": "offline" if len(net.alerts) > 20 else ("warning" if len(attacker_alerts) > 0 else "online"),
         "timestamp": now_iso(),
     })
 

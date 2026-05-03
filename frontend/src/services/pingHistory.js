@@ -38,12 +38,13 @@ export function getPingTimeMs(ping) {
 
 export function formatPingTimelineTime(ping) {
   const timeMs = getPingTimeMs(ping);
-  if (!timeMs) return '--:--';
+  if (!timeMs) return '--:--:--';
 
   const date = new Date(timeMs);
+  const hours = String(date.getHours()).padStart(2, '0');
   const minutes = String(date.getMinutes()).padStart(2, '0');
   const seconds = String(date.getSeconds()).padStart(2, '0');
-  return `${minutes}:${seconds}`;
+  return `${hours}:${minutes}:${seconds}`;
 }
 
 export function normalizePingEntry(ping) {

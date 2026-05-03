@@ -62,7 +62,7 @@ export default function Dashboard() {
           pingAPI.getAll({ limit: 10 }),
         ]);
         const latestPing = latestPingRes.data && Object.keys(latestPingRes.data).length ? latestPingRes.data : null;
-        const lastPingCandidate = latestPing || dashboardRes.data?.last_ping || dashboardRes.data?.last_ping_result || null;
+        const lastPingCandidate = latestPing || dashboardRes.data?.last_ping || dashboardRes.data?.last_ping_result || dashboardRes.data?.last_ping_flow || null;
         const lastKey = (lastPingCandidate?.id || lastPingCandidate?.flow_id || '').toString();
         const lastSeq = getPingSequence(lastPingCandidate);
         const clearedSeq = lastPingClearedAfterId ? getPingSequence({ id: lastPingClearedAfterId }) : null;
@@ -134,7 +134,7 @@ export default function Dashboard() {
       pingAPI.getAll({ limit: 10 }),
     ]);
     const latestPing = latestPingRes.data && Object.keys(latestPingRes.data).length ? latestPingRes.data : null;
-    const lastPingCandidate = latestPing || response.data?.last_ping || response.data?.last_ping_result || null;
+    const lastPingCandidate = latestPing || response.data?.last_ping || response.data?.last_ping_result || response.data?.last_ping_flow || null;
     const lastKey = (lastPingCandidate?.id || lastPingCandidate?.flow_id || '').toString();
     const lastSeq = getPingSequence(lastPingCandidate);
     const clearedSeq = lastPingClearedAfterId ? getPingSequence({ id: lastPingClearedAfterId }) : null;

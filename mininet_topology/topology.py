@@ -113,12 +113,16 @@ class SDNEnterpriseTopo(Topo):
         ddos_att = self.addHost('ddos_att', ip='192.168.100.30/24', defaultRoute='via 192.168.100.1')
         arp_att = self.addHost('arp_att', ip='192.168.100.40/24', defaultRoute='via 192.168.100.1')
         scan_att = self.addHost('scan_att', ip='192.168.100.50/24', defaultRoute='via 192.168.100.1')
+        brute_att = self.addHost('brute_att', ip='192.168.100.60/24', defaultRoute='via 192.168.100.1')
+        icmp_att = self.addHost('icmp_att', ip='192.168.100.70/24', defaultRoute='via 192.168.100.1')
 
         self.addLink(attacker, edge_sw)
         self.addLink(pub_user, edge_sw)
         self.addLink(ddos_att, edge_sw)
         self.addLink(arp_att, edge_sw)
         self.addLink(scan_att, edge_sw)
+        self.addLink(brute_att, edge_sw)
+        self.addLink(icmp_att, edge_sw)
 
 
 # =========================
